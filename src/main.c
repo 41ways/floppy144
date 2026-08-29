@@ -1,0 +1,276 @@
+/* main.c - platform layer.
+ * Opens a window, gets a real OpenGL 3.3 core context out of WGL, and runs the
+ * frame loop. Nothing here links against anything Windows does not already
+ * ship, so the distribution stays a single .exe. */
+
+#define WIN32_LEAN_AND_MEAN
+#include "gl33.h"
+#include "shaders.h"
+
+#define APP_TITLE   "SECTOR ZERO"
+#define APP_CLASS   "sz_window"
+#define WIN_W       1280
+#define WIN_H       720
+
+typedef BOOL  (WINAPI *PFNWGLCHOOSEPIXELFORMATARB)(HDC, const int*, const FLOAT*, UINT, int*, UINT*);
+typedef HGLRC (WINAPI *PFNWGLCREATECONTEXTATTRIBSARB)(HDC, HGLRC, const int*);
+typedef BOOL  (WINAPI *PFNWGLSWAPINTERVALEXT)(int);
+
+static PFNWGLCHOOSEPIXELFORMATARB    p_wglChoosePixelFormatARB;
+static PFNWGLCREATECONTEXTATTRIBSARB p_wglCreateContextAttribsARB;
+static PFNWGLSWAPINTERVALEXT         p_wglSwapIntervalEXT;
+
+static int g_running = 1;
+static int g_width  = WIN_W;
+static int g_height = WIN_H;
+
+static void fail(const char *msg)
+{
+    MessageBoxA(0, msg, APP_TITLE " - startup failed", MB_OK | MB_ICONERROR);
+    ExitProcess(1);
+}
+
+static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    switch (msg) {
+    case WM_CLOSE:
+    case WM_DESTROY:
+        g_running = 0;
+        return 0;
+    case WM_KEYDOWN:
+        if (wp == VK_ESCAPE) g_running = 0;
+        return 0;
+    case WM_SIZE:
+        g_width  = LOWORD(lp);
+        g_height = HIWORD(lp);
+        if (g_width  < 1) g_width  = 1;
+        if (g_height < 1) g_height = 1;
+        glViewport(0, 0, g_width, g_height);
+        return 0;
+    case WM_ERASEBKGND:
+        /* the game repaints every frame, so let Windows skip the background */
+        return 1;
+    }
+    return DefWindowProcA(hwnd, msg, wp, lp);
+}
+
+/* WGL only describes modern pixel formats through an extension, and looking up
+ * an extension needs a live context. So: throwaway window, throwaway context,
+ * grab the entry points, tear it down, then start over properly. */
+static void load_wgl_extensions(HINSTANCE inst)
+{
+    HWND  dummy;
+    HDC   dc;
+    HGLRC rc;
+    PIXELFORMATDESCRIPTOR pfd;
+    int   fmt;
+
+    dummy = CreateWindowExA(0, APP_CLASS, "", WS_OVERLAPPEDWINDOW,
+                            CW_USEDEFAULT, CW_USEDEFAULT, 64, 64,
+                            0, 0, inst, 0);
+    if (!dummy) fail("Could not create the bootstrap window.");
+
+    dc = GetDC(dummy);
+
+    ZeroMemory(&pfd, sizeof pfd);
+    pfd.nSize        = sizeof pfd;
+    pfd.nVersion     = 1;
+    pfd.dwFlags      = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER;
+    pfd.iPixelType   = PFD_TYPE_RGBA;
+    pfd.cColorBits   = 32;
+    pfd.cDepthBits   = 24;
+    pfd.cStencilBits = 8;
+
+    fmt = ChoosePixelFormat(dc, &pfd);
+    if (!fmt || !SetPixelFormat(dc, fmt, &pfd))
+        fail("No usable OpenGL pixel format on this display.");
+
+    rc = wglCreateContext(dc);
+    if (!rc || !wglMakeCurrent(dc, rc))
+        fail("Could not create a bootstrap OpenGL context.");
+
+    p_wglChoosePixelFormatARB =
+        (PFNWGLCHOOSEPIXELFORMATARB)wglGetProcAddress("wglChoosePixelFormatARB");
+    p_wglCreateContextAttribsARB =
+        (PFNWGLCREATECONTEXTATTRIBSARB)wglGetProcAddress("wglCreateContextAttribsARB");
+    p_wglSwapIntervalEXT =
+        (PFNWGLSWAPINTERVALEXT)wglGetProcAddress("wglSwapIntervalEXT");
+
+    wglMakeCurrent(0, 0);
+    wglDeleteContext(rc);
+    ReleaseDC(dummy, dc);
+    DestroyWindow(dummy);
+
+    if (!p_wglCreateContextAttribsARB)
+        fail("This driver does not support OpenGL 3.3.\n"
+             "Update your graphics driver and try again.");
+}
+
+static GLuint compile(GLenum type, const char *src, const char *label)
+{
+    GLuint sh = glCreateShader(type);
+    GLint  ok = 0;
+
+    glShaderSource(sh, 1, &src, 0);
+    glCompileShader(sh);
+    glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
+    if (!ok) {
+        char log[1024];
+        char msg[1280];
+        glGetShaderInfoLog(sh, sizeof log, 0, log);
+        wsprintfA(msg, "%s shader failed to compile:\n\n%s", label, log);
+        fail(msg);
+    }
+    return sh;
+}
+
+static GLuint build_program(void)
+{
+    GLuint vs   = compile(GL_VERTEX_SHADER,   VS_SRC, "Vertex");
+    GLuint fs   = compile(GL_FRAGMENT_SHADER, FS_SRC, "Fragment");
+    GLuint prog = glCreateProgram();
+    GLint  ok   = 0;
+
+    glAttachShader(prog, vs);
+    glAttachShader(prog, fs);
+    glLinkProgram(prog);
+    glGetProgramiv(prog, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        char log[1024];
+        char msg[1280];
+        glGetProgramInfoLog(prog, sizeof log, 0, log);
+        wsprintfA(msg, "Shader program failed to link:\n\n%s", log);
+        fail(msg);
+    }
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    return prog;
+}
+
+int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
+{
+    WNDCLASSA wc;
+    HWND   hwnd;
+    HDC    dc;
+    HGLRC  rc;
+    RECT   rect;
+    GLuint prog, vao;
+    GLint  u_res, u_time;
+    LARGE_INTEGER freq, start, now;
+    MSG    msg;
+    PIXELFORMATDESCRIPTOR pfd;
+    int    fmt = 0;
+    UINT   fmt_count = 0;
+
+    const int pf_attribs[] = {
+        WGL_DRAW_TO_WINDOW_ARB, GL_TRUE,
+        WGL_SUPPORT_OPENGL_ARB, GL_TRUE,
+        WGL_DOUBLE_BUFFER_ARB,  GL_TRUE,
+        WGL_ACCELERATION_ARB,   WGL_FULL_ACCELERATION_ARB,
+        WGL_PIXEL_TYPE_ARB,     WGL_TYPE_RGBA_ARB,
+        WGL_COLOR_BITS_ARB,     32,
+        WGL_DEPTH_BITS_ARB,     24,
+        WGL_STENCIL_BITS_ARB,   8,
+        0
+    };
+    const int ctx_attribs[] = {
+        WGL_CONTEXT_MAJOR_VERSION_ARB, 3,
+        WGL_CONTEXT_MINOR_VERSION_ARB, 3,
+        WGL_CONTEXT_PROFILE_MASK_ARB,  WGL_CONTEXT_CORE_PROFILE_BIT_ARB,
+        0
+    };
+
+    (void)prev; (void)cmd; (void)show;
+
+    ZeroMemory(&wc, sizeof wc);
+    wc.style         = CS_OWNDC | CS_HREDRAW | CS_VREDRAW;
+    wc.lpfnWndProc   = wnd_proc;
+    wc.hInstance     = inst;
+    wc.hCursor       = LoadCursorA(0, IDC_ARROW);
+    wc.lpszClassName = APP_CLASS;
+    if (!RegisterClassA(&wc)) fail("Could not register the window class.");
+
+    load_wgl_extensions(inst);
+
+    rect.left = 0; rect.top = 0; rect.right = WIN_W; rect.bottom = WIN_H;
+    AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
+
+    hwnd = CreateWindowExA(0, APP_CLASS, APP_TITLE, WS_OVERLAPPEDWINDOW,
+                           CW_USEDEFAULT, CW_USEDEFAULT,
+                           rect.right - rect.left, rect.bottom - rect.top,
+                           0, 0, inst, 0);
+    if (!hwnd) fail("Could not create the game window.");
+
+    dc = GetDC(hwnd);
+
+    if (p_wglChoosePixelFormatARB &&
+        p_wglChoosePixelFormatARB(dc, pf_attribs, 0, 1, &fmt, &fmt_count) &&
+        fmt_count > 0) {
+        DescribePixelFormat(dc, fmt, sizeof pfd, &pfd);
+    } else {
+        /* older driver: the classic path still gets us a 3.3 context */
+        ZeroMemory(&pfd, sizeof pfd);
+        pfd.nSize        = sizeof pfd;
+        pfd.nVersion     = 1;
+        pfd.dwFlags      = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER;
+        pfd.iPixelType   = PFD_TYPE_RGBA;
+        pfd.cColorBits   = 32;
+        pfd.cDepthBits   = 24;
+        pfd.cStencilBits = 8;
+        fmt = ChoosePixelFormat(dc, &pfd);
+    }
+    if (!fmt || !SetPixelFormat(dc, fmt, &pfd))
+        fail("No usable OpenGL pixel format on this display.");
+
+    rc = p_wglCreateContextAttribsARB(dc, 0, ctx_attribs);
+    if (!rc || !wglMakeCurrent(dc, rc))
+        fail("Could not create an OpenGL 3.3 core context.\n"
+             "Update your graphics driver and try again.");
+
+    if (!gl33_load())
+        fail("This driver is missing OpenGL 3.3 entry points the game needs.");
+
+    if (p_wglSwapIntervalEXT) p_wglSwapIntervalEXT(1);   /* vsync */
+
+    prog = build_program();
+    glGenVertexArrays(1, &vao);    /* core profile refuses to draw without one */
+    glBindVertexArray(vao);
+
+    u_res  = glGetUniformLocation(prog, "uRes");
+    u_time = glGetUniformLocation(prog, "uTime");
+
+    ShowWindow(hwnd, SW_SHOW);
+    glViewport(0, 0, g_width, g_height);
+
+    QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&start);
+
+    while (g_running) {
+        float t;
+
+        while (PeekMessageA(&msg, 0, 0, 0, PM_REMOVE)) {
+            if (msg.message == WM_QUIT) g_running = 0;
+            TranslateMessage(&msg);
+            DispatchMessageA(&msg);
+        }
+
+        QueryPerformanceCounter(&now);
+        t = (float)((double)(now.QuadPart - start.QuadPart) /
+                    (double)freq.QuadPart);
+
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        glUseProgram(prog);
+        glUniform2f(u_res, (float)g_width, (float)g_height);
+        glUniform1f(u_time, t);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+
+        SwapBuffers(dc);
+    }
+
+    wglMakeCurrent(0, 0);
+    wglDeleteContext(rc);
+    ReleaseDC(hwnd, dc);
+    return 0;
+}

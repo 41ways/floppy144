@@ -1,0 +1,7 @@
+dist/
+*.o
+*.exe
+*.obj
+*.pdb
+.vscode/
+.idea/

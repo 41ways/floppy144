@@ -1,0 +1,35 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows-x64:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Cross-compiling from Linux beats a Windows runner here: the container
+      # boots in seconds and mingw-w64 produces the same binary.
+      - name: Install mingw-w64
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64
+
+      - name: Build
+        run: make
+
+      # The contest limit is a hard gate, so it fails the job rather than
+      # warning. The report also lands in the run summary, readable on a phone.
+      - name: Disk budget
+        run: python3 tools/sizecheck.py dist
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: SECTORZERO-win64
+          path: dist/
+          if-no-files-found: error
