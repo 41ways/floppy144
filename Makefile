@@ -6,7 +6,13 @@
 #   make size     build, then report against the 1,474,560 byte budget
 #   make clean
 
-CC      ?= x86_64-w64-mingw32-gcc
+# CC ?= does not work here: make ships a built-in default of `cc`, which counts
+# as already defined, so the cross compiler never gets picked up. Checking
+# origin overrides only that built-in and still lets `make CC=gcc` win.
+ifeq ($(origin CC),default)
+CC := x86_64-w64-mingw32-gcc
+endif
+
 OUT     := dist
 TARGET  := $(OUT)/SECTORZERO.exe
 SRC     := src/main.c src/gl33.c
