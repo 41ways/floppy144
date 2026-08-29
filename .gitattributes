@@ -1,0 +1,8 @@
+# CI builds on Linux. A Makefile or shell script that arrives with CRLF
+# breaks there, so normalise everything to LF in the repository regardless
+# of the checkout platform.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.exe binary
