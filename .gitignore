@@ -5,3 +5,4 @@ dist/
 *.pdb
 .vscode/
 .idea/
+shotlog.txt

@@ -25,7 +25,7 @@
 #define REV_C       12409
 #define AP_LEN       1051
 
-enum { V_PING, V_ROAR, V_HIT };
+enum { V_PING, V_ROAR, V_HIT, V_BEEP };
 
 typedef struct {
     int   active;
@@ -97,6 +97,11 @@ static float voice_sample(Voice *v)
         float saw = (float)fmod(f * v->t, 1.0) * 2.0f - 1.0f;
         float sub = (float)sin(6.2831853 * (f * 0.5) * v->t);
         s = (saw * 0.34f + sub * 0.30f + frand() * 0.16f) * env * 0.55f;
+    } else if (v->kind == V_BEEP) {
+        /* the flat blip of a bedside monitor, heard from under */
+        float env = (x < 0.05f ? x / 0.05f : (float)exp(-(x - 0.05f) * 7.0f));
+        s = ((float)sin(6.2831853 * 1046.0 * v->t)
+           + (float)sin(6.2831853 * 2092.0 * v->t) * 0.25f) * env * 0.30f;
     } else { /* V_HIT */
         float env = (float)exp(-x * 9.0f);
         s = (frand() * 0.8f + (float)sin(6.2831853 * 120.0 * v->t) * 0.4f) * env * 0.6f;
@@ -207,3 +212,4 @@ void audio_shutdown(void)
 void audio_ping(void) { voice_start(V_PING, 2.60f); }
 void audio_roar(void) { voice_start(V_ROAR, 1.70f); }
 void audio_hit(void)  { voice_start(V_HIT,  0.55f); }
+void audio_beep(void) { voice_start(V_BEEP, 0.42f); }

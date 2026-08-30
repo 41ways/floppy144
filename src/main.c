@@ -454,9 +454,22 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
         game_frame(&in, dt, now, g_width, g_height);
         audio_update();
 
-        if (shot_path[0] && ++frame >= shot_at) {
-            save_rgb(shot_path, g_width, g_height);
-            g_running = 0;
+        if (shot_path[0]) {
+            /* a capture that cannot report the state it captured is half a
+               tool, so the numbers go beside the pixels */
+            if ((frame % 20) == 0) {
+                FILE *lg = fopen("shotlog.txt", "a");
+                if (lg) {
+                    fprintf(lg, "frame %4d  state %d  pos %7.2f %6.2f %7.2f  travelled %6.2f\n",
+                            frame, game_state(), game_px(), game_py(),
+                            game_pz(), game_travelled());
+                    fclose(lg);
+                }
+            }
+            if (++frame >= shot_at) {
+                save_rgb(shot_path, g_width, g_height);
+                g_running = 0;
+            }
         }
         SwapBuffers(dc);
 

@@ -85,13 +85,14 @@ static Point *g_pts;
 static int    g_count;
 static Point *g_wpts;          /* the wave in flight, a ring that nobody reads back */
 static int    g_wcount;
-static GLuint g_vao, g_vbo, g_wvao, g_wvbo, g_mvao, g_mvbo, g_hvao, g_hvbo, g_prog;
+static GLuint g_vao, g_vbo, g_wvao, g_wvbo, g_mvao, g_mvbo, g_hvao, g_hvbo,
+              g_rvao, g_rvbo, g_prog;
 static GLint  u_vp, u_cam, u_time, u_monster, u_persist, u_flat, u_base, u_ink;
 static Point *g_mpts;          /* heap: 48 KB of it has no business in the exe */
 
 /* --- state -------------------------------------------------------------- */
 
-enum { ST_TITLE, ST_PLAY, ST_WAKE };
+enum { ST_TITLE, ST_PLAY, ST_SURFACE, ST_WAKE };
 static int g_state;
 
 extern int plat_text_points(const char *str, int px, float *out_xy, int max);
@@ -108,7 +109,10 @@ static float g_start_depth;
 static int   g_stage;
 static float g_stage_flash;
 static float g_wake;
+static float g_surf;              /* 0..1 through a glimpse of the room */
+static float g_clarity;           /* how much of it resolves this time */
 static int   g_has_moved;
+static float g_travelled;
 
 /* --- cave shape, rerolled every attempt --------------------------------- */
 
@@ -336,6 +340,9 @@ typedef struct {
 } Monster;
 
 static Monster g_mon[MAX_MON];
+
+static void build_room(void);
+static void upload_room(float clarity);
 
 static void mon_feet(Monster *m, float dt, const float *f,
                      const float *sd, const float *n);
@@ -1026,7 +1033,16 @@ static void respawn(float now)
      * of yellow returns. Start on the axis instead. */
     tunnel_centre(-g_start_depth, &cx, &cy);
     g_px = cx; g_py = cy; g_pz = -g_start_depth;
-    g_yaw = 0.0f; g_pitch = 0.0f;
+    {   /* The tunnel bends, so a fixed heading points into the wall as often
+         * as not - and in the dark that is indistinguishable from the game
+         * being broken. Face the way the passage actually runs. */
+        float ax, ay, fx, fz;
+        tunnel_centre(-g_start_depth - 3.0f, &ax, &ay);
+        fx = ax - cx;
+        fz = -3.0f;
+        g_yaw = (float)atan2(fx, -fz);
+    }
+    g_pitch = 0.0f;
     g_ping_ready = now + 0.6f;
     g_mon_count = mon_target_count();
     for (i = 0; i < MAX_MON; i++) mon_place(&g_mon[i], now + (float)i);
@@ -1042,11 +1058,19 @@ static void new_attempt(unsigned seed, float now)
     g_wander = 0.80f + rndf() * 0.45f;      /* 0.80 .. 1.25 */
     g_rough  = 0.70f + rndf() * 0.70f;      /* 0.70 .. 1.40 */
     build_branches();
+    build_room();
     g_count  = 0;
     g_lives  = START_LIVES;
     g_best_depth = 0.0f;
     g_has_moved = 0;
+    /* Starting deep means the thresholds above you are already behind you.
+     * This lived in game_init, but the click that starts a run calls
+     * new_attempt again and reset it - so a stage build opened by walking
+     * straight into an interlude it had not earned. */
     g_stage = 0;
+    while (g_stage < 4 && g_start_depth >= (g_stage == 0 ? GATE_1 :
+                          g_stage == 1 ? GATE_2 : g_stage == 2 ? GATE_3 : GATE_END))
+        g_stage++;
     g_stage_flash = 0.0f;
     g_wake = 0.0f;
     respawn(now);
@@ -1149,6 +1173,107 @@ static void hud_build(const char *left, const char *right, const char *hint)
     }
 }
 
+/* --- the room -----------------------------------------------------------
+ * What surfaces between stages. Not a place you stand in - a flat smear of
+ * what eyes half-open would take in: strip lights overhead, a window, a rail,
+ * someone leaning over. Clarity decides how much of it holds together, and it
+ * rises at every threshold, so the reality you keep sinking out of gets
+ * harder to mistake for anything else each time.
+ *
+ * Sketched from primitives, so the whole room is a few hundred bytes. */
+
+#define ROOM_MAX 3000
+
+static Point *g_room;
+static int    g_room_n;
+
+static void room_put(float x, float y, float g)
+{
+    if (g_room_n >= ROOM_MAX) return;
+    g_room[g_room_n].x = x;
+    g_room[g_room_n].y = y;
+    g_room[g_room_n].z = 0.0f;
+    g_room[g_room_n].reveal = 0.0f;
+    g_room[g_room_n].gain = g;
+    g_room_n++;
+}
+
+static void room_line(float x0, float y0, float x1, float y1, int n, float g)
+{
+    int i;
+    for (i = 0; i < n; i++) {
+        float u = (float)i / (float)(n - 1);
+        room_put(x0 + (x1 - x0) * u, y0 + (y1 - y0) * u, g);
+    }
+}
+
+static void upload_room(float clarity)
+{
+    int i;
+    float blur = (1.0f - clarity) * 0.16f;
+    for (i = 0; i < g_room_n; i++) {
+        float h = (float)i * 1.37f + clarity * 91.0f;
+        g_room[i].reveal = (hash1(h) - 0.5f) * 2.0f * blur;        /* dx, reused */
+        g_room[i].z      = (hash1(h + 5.1f) - 0.5f) * 2.0f * blur; /* dy, reused */
+    }
+    for (i = 0; i < g_room_n; i++) {
+        g_room[i].x += g_room[i].reveal;
+        g_room[i].y += g_room[i].z;
+        g_room[i].z = 0.0f;
+        g_room[i].reveal = 0.0f;
+    }
+    glBindBuffer(GL_ARRAY_BUFFER, g_rvbo);
+    glBufferSubData(GL_ARRAY_BUFFER, 0,
+                    (GLsizeiptr)(g_room_n * (int)sizeof(Point)), g_room);
+}
+
+static void build_room(void)
+{
+    int i;
+    g_room_n = 0;
+
+    /* two strip lights on the ceiling, the brightest thing in the room */
+    for (i = 0; i < 2; i++) {
+        float y = 0.74f - (float)i * 0.16f;
+        float w = 0.52f - (float)i * 0.13f;
+        room_line(-w, y, w, y, 150, 1.00f);
+        room_line(-w, y - 0.035f, w, y - 0.035f, 120, 0.72f);
+    }
+
+    /* a window off to one side: the only daylight */
+    room_line(-0.94f,  0.42f, -0.52f,  0.42f, 60, 0.85f);
+    room_line(-0.94f, -0.20f, -0.52f, -0.20f, 60, 0.85f);
+    room_line(-0.94f,  0.42f, -0.94f, -0.20f, 70, 0.85f);
+    room_line(-0.52f,  0.42f, -0.52f, -0.20f, 70, 0.85f);
+    for (i = 0; i < 260; i++) {                /* the light coming through it */
+        float u = hash1((float)i * 1.7f), v = hash1((float)i * 3.1f + 5.0f);
+        room_put(-0.94f + u * 0.42f, -0.20f + v * 0.62f, 0.34f);
+    }
+
+    /* a bed rail across the bottom of the view */
+    room_line(-0.80f, -0.62f, 0.80f, -0.62f, 180, 0.66f);
+    for (i = 0; i < 9; i++) {
+        float x = -0.72f + (float)i * 0.18f;
+        room_line(x, -0.62f, x, -0.78f, 22, 0.52f);
+    }
+
+    /* a drip stand */
+    room_line(0.78f, 0.62f, 0.78f, -0.55f, 90, 0.58f);
+    room_line(0.66f, 0.62f, 0.90f, 0.62f, 26, 0.58f);
+
+    /* and someone leaning in over the right of the bed */
+    for (i = 0; i < 200; i++) {                /* head */
+        float a = hash1((float)i * 2.3f) * 6.2831853f;
+        float r = 0.115f * (float)sqrt(hash1((float)i * 4.7f + 2.0f));
+        room_put(0.34f + (float)cos(a) * r, 0.20f + (float)sin(a) * r * 1.15f, 0.95f);
+    }
+    for (i = 0; i < 420; i++) {                /* shoulders and chest */
+        float u = hash1((float)i * 1.9f + 7.0f), v = hash1((float)i * 5.3f + 1.0f);
+        float w = 0.30f - 0.10f * v;
+        room_put(0.34f + (u - 0.5f) * 2.0f * w, 0.03f - v * 0.46f, 0.88f);
+    }
+}
+
 /* --- setup -------------------------------------------------------------- */
 
 extern GLuint gfx_build_program(const char *vs, const char *fs);  /* main.c */
@@ -1174,6 +1299,7 @@ void game_init(unsigned seed, float start_depth)
     g_wpts    = (Point *)malloc((size_t)WAVE_POINTS * sizeof(Point));
     g_hud     = (Point *)malloc((size_t)HUD_MAX * sizeof(Point));
     g_mpts    = (Point *)malloc((size_t)MON_POINTS * sizeof(Point));
+    g_room    = (Point *)malloc((size_t)ROOM_MAX * sizeof(Point));
     g_flash = 0.0f;
 
     g_prog    = gfx_build_program(POINT_VS, POINT_FS);
@@ -1209,6 +1335,13 @@ void game_init(unsigned seed, float start_depth)
                  0, GL_DYNAMIC_DRAW);
     setup_attribs(g_hvao, g_hvbo);
 
+    glGenVertexArrays(1, &g_rvao);
+    glGenBuffers(1, &g_rvbo);
+    glBindBuffer(GL_ARRAY_BUFFER, g_rvbo);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)ROOM_MAX * (GLsizeiptr)sizeof(Point),
+                 0, GL_DYNAMIC_DRAW);
+    setup_attribs(g_rvao, g_rvbo);
+
     glGenVertexArrays(1, &g_mvao);
     glGenBuffers(1, &g_mvbo);
     glBindBuffer(GL_ARRAY_BUFFER, g_mvbo);
@@ -1224,10 +1357,6 @@ void game_init(unsigned seed, float start_depth)
 
     g_start_depth = start_depth;
     new_attempt(seed, 0.0f);
-    /* a test build dropped in at depth is already past those thresholds */
-    while (g_stage < 4 && g_start_depth >= (g_stage == 0 ? GATE_1 :
-                          g_stage == 1 ? GATE_2 : g_stage == 2 ? GATE_3 : GATE_END))
-        g_stage++;
     enter_title(0.0f);
 }
 
@@ -1237,15 +1366,25 @@ void game_init(unsigned seed, float start_depth)
 
 #define PLAYER_R 0.62f
 
-/* Testing each axis separately against a noisy field meant catching on every
- * bump in the rock: one blocked axis simply stopped, so a wall you were
- * brushing past held you. Move first, then push back out along the gradient -
- * which slides along the surface instead of stopping dead on it. Twice,
- * because one push can land you inside something else in a corner. */
+/* Pushing out of the rock kept you out of it but did nothing to help you get
+ * anywhere: hold a direction into a wall and you simply stopped. Take the
+ * wall-parallel part of the step instead and you slide along it, which is
+ * what walking down a bending tunnel in the dark actually requires. */
 static void try_move(float dx, float dy, float dz)
 {
-    float n[3], d;
+    float n[3], d, dot;
     int i;
+
+    d = cave_sdf(g_px + dx, g_py + dy, g_pz + dz);
+    if (d < PLAYER_R) {
+        cave_normal(g_px, g_py, g_pz, n);
+        dot = dx * n[0] + dy * n[1] + dz * n[2];
+        if (dot < 0.0f) {                  /* heading into the rock */
+            dx -= dot * n[0];
+            dy -= dot * n[1];
+            dz -= dot * n[2];
+        }
+    }
 
     g_px += dx; g_py += dy; g_pz += dz;
 
@@ -1266,6 +1405,56 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
     float proj[16], view[16], vp[16];
     float limit = 1.5533f;                       /* just under 89 degrees */
     int i, want;
+
+    if (g_state == ST_SURFACE) {
+        /* Two and a half seconds of somewhere else. It comes up, holds, and
+         * lets go again - and each time a little more of it stays put. */
+        static const char *HEARD[3] = {
+            "CAN YOU HEAR ME",
+            "NO RESPONSE TO PAIN",
+            "HE MOVED - DID YOU SEE THAT"
+        };
+        float e;
+        g_surf += dt / 2.6f;
+        if (g_surf >= 1.0f) { g_state = ST_PLAY; g_ping_ready = now + 0.3f; return; }
+
+        e = (float)sin(3.1415927f * g_surf);          /* up, hold, back down */
+        e = e * e;
+
+        /* Behind closed eyes the room is not a lit scene - it is light
+         * getting in. So it is drawn the same way the cave is, as points that
+         * add, against a ground that stays nearly black. Ink on pale was the
+         * wrong way round and came out invisible. */
+        glClearColor(0.02f + e * g_clarity * 0.09f,
+                     0.03f + e * g_clarity * 0.09f,
+                     0.05f + e * g_clarity * 0.10f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        glUseProgram(g_prog);
+        glUniform1f(u_time, now);
+        glUniform1f(u_monster, 0.0f);
+        glUniform1f(u_persist, 1.0f);
+        glUniform1f(u_flat, 1.0f);
+        glUniform1f(u_ink, 0.0f);
+        glUniform1f(u_base, e * (0.30f + 0.70f * g_clarity));
+
+        if (g_room_n > 0) {
+            glBindVertexArray(g_rvao);
+            glDrawArrays(GL_POINTS, 0, g_room_n);
+        }
+        if (e > 0.5f && g_stage >= 1 && g_stage <= 3) {
+            hud_build("", "", HEARD[g_stage - 1]);
+            if (g_hud_n > 0) {
+                glUniform1f(u_base, e * 0.85f);
+                glBindVertexArray(g_hvao);
+                glDrawArrays(GL_POINTS, 0, g_hud_n);
+            }
+        }
+
+        glUniform1f(u_base, 0.0f);
+        glUniform1f(u_flat, 0.0f);
+        return;
+    }
 
     if (g_state == ST_WAKE) {
         /* The whole game is darkness with a few points in it. Waking is the
@@ -1373,7 +1562,11 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
     len = (float)sqrt(mx * mx + my * my + mz * mz);
     if (len > 0.0001f) {
         float s = MOVE_SPEED * dt / len;
-        try_move(mx * s, my * s, mz * s);
+        {   float ox = g_px, oy = g_py, oz = g_pz;
+            try_move(mx * s, my * s, mz * s);
+            g_travelled += (float)sqrt((g_px-ox)*(g_px-ox) + (g_py-oy)*(g_py-oy)
+                                     + (g_pz-oz)*(g_pz-oz));
+        }
         g_has_moved = 1;
     }
 
@@ -1384,10 +1577,18 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
         while (g_stage < 4 && -g_pz >= GATES[g_stage]) {
             g_stage++;
             g_stage_flash = 1.0f;
-            audio_roar();                      /* the cave acknowledging it */
             if (g_stage >= 4) {
                 g_state = ST_WAKE;             /* through, and surfacing */
                 g_wake  = 0.0f;
+            } else {
+                /* the room comes up for a moment, and a little more of it
+                   holds together than it did at the last threshold */
+                g_state   = ST_SURFACE;
+                g_surf    = 0.0f;
+                g_clarity = 0.26f + 0.27f * (float)(g_stage - 1);
+                build_room();
+                upload_room(g_clarity);
+                audio_beep();
             }
         }
     }
@@ -1516,3 +1717,9 @@ int   game_point_count(void) { return g_count; }
 float game_depth(void)       { return -g_pz; }
 int   game_lives(void)       { return g_lives; }
 int   game_monsters(void)    { return g_mon_count; }
+int   game_stage(void)       { return g_stage; }
+int   game_state(void)       { return g_state; }
+float game_px(void)          { return g_px; }
+float game_py(void)          { return g_py; }
+float game_pz(void)          { return g_pz; }
+float game_travelled(void)   { return g_travelled; }

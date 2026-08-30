@@ -34,7 +34,7 @@ static const char *POINT_VS =
 /* What it leaves behind. Only surfaces get this: the wave crossing open
    air is visible as it passes and then is simply gone, so the map that
    accumulates is walls and nothing else. */
-"  float memory = (age > 0.0 ? 0.17 : 0.0) * uPersist;\n"
+"  float memory = (age > 0.0 ? 0.34 : 0.0) * uPersist;\n"
 /* a metre of free sight so the player never walks off a ledge blind */
 "  float close  = exp(-pow(d / 1.45, 2.0)) * 0.22 * uPersist;\n"
 /* uBase holds a thing lit whatever the wavefront is doing, so the title
@@ -65,7 +65,7 @@ static const char *POINT_FS =
 "  c = mix(c, vec3(1.00, 0.13, 0.07), uMonster);\n"
 "  float a = vBright * exp(-vDist * 0.055);\n"
 /* the rock under your nose is already known - let the distance read */
-"  a *= mix(0.35 + 0.65 * smoothstep(0.5, 4.0, vDist), 1.0, uFlat);\n"
+"  a *= mix(0.52 + 0.48 * smoothstep(0.5, 4.0, vDist), 1.0, uFlat);\n"
 "  a = mix(a, min(a * 2.2, 1.0), uMonster);\n"
 /* Waking floods the screen white, and light added to white is still
    white - so that one pass writes dark ink over it instead. */
