@@ -49,16 +49,16 @@
 #define START_LIVES        3
 #define DEPTH_FULL     140.0f  /* metres at which the cave is at its worst */
 
-#define MON_POINTS      2400   /* limbs need volume, not a dotted line */
-#define LEG_TUBE           5   /* points around the curve at each sample */
+#define MON_POINTS      2800   /* limbs need volume, not a dotted line */
+#define LEG_TUBE           6   /* points around the curve at each sample */
 #define MAX_MON            4
 #define MON_KILL_DIST   1.05f
 #define WALL_HUG       0.34f   /* how far off the rock it rides */
 #define WEAVE_RATE      2.9f   /* how fast it swings side to side */
 #define WEAVE_AMT      0.52f   /* and how far - too much and it circles instead of closing */
 #define GAIT_RATE       4.4f   /* leg cycles per metre travelled */
-#define MON_RANGE      30.0f   /* how far it will chase before it comes apart */
-#define BURST_TIME     0.75f   /* and how long it takes to scatter */
+#define MON_RANGE      16.0f   /* how far it will chase before it comes apart */
+#define BURST_TIME     0.55f   /* and how long it takes to scatter */
 
 /* --- point cloud -------------------------------------------------------- */
 
@@ -149,12 +149,59 @@ static float depth_k(float z)
     return d;
 }
 
+/* The axis wanders on two scales at once: a long swing that decides roughly
+ * where the passage is heading, and a short one that keeps it from ever being
+ * straight for more than a dozen metres.
+ *
+ * The short term is what was missing. Wavelengths used to be forty-eight and
+ * a hundred and thirty metres, so across the twenty-six a ping reaches the
+ * tunnel was effectively a line. These bend every sixteen.
+ *
+ * Amplitudes are held down to keep the slope under about one: any steeper and
+ * the cross-section, which is measured across z rather than across the axis,
+ * pinches shut and the passage stops being passable. */
 static void tunnel_centre(float z, float *cx, float *cy)
 {
     float w = g_wander;
-    *cx = (float)sin(z * 0.13 + g_seed)        * 3.2f * w
-        + (float)sin(z * 0.047 + g_seed * 1.7) * 2.1f * w;
-    *cy = (float)cos(z * 0.097 + g_seed * 2.3) * 1.6f * w;
+    *cx = (float)sin(z * 0.100 + g_seed)        * 3.8f * w      /* 63 m swing */
+        + (float)sin(z * 0.400 + g_seed * 1.7)  * 1.4f;         /* 16 m kinks */
+    *cy = (float)cos(z * 0.070 + g_seed * 2.3)  * 2.4f * w      /* 90 m swing */
+        + (float)sin(z * 0.310 + g_seed * 3.1)  * 1.1f;         /* 20 m kinks */
+}
+
+/* --- side passages -------------------------------------------------------
+ * A branch is a capsule leaving the main axis at an angle. The cave is the
+ * union of the two, and because air is positive that union is a max. */
+
+#define BRANCH_SPACING 34.0f
+#define BRANCH_LEN     17.0f
+#define BRANCH_RAD      1.75f
+
+static float seg_dist(float px, float py, float pz,
+                      float ax, float ay, float az,
+                      float bx, float by, float bz)
+{
+    float dx = bx - ax, dy = by - ay, dz = bz - az;
+    float wx = px - ax, wy = py - ay, wz = pz - az;
+    float dd = dx * dx + dy * dy + dz * dz;
+    float t  = dd > 1e-6f ? (wx * dx + wy * dy + wz * dz) / dd : 0.0f;
+    if (t < 0.0f) t = 0.0f;
+    if (t > 1.0f) t = 1.0f;
+    wx -= dx * t; wy -= dy * t; wz -= dz * t;
+    return (float)sqrt(wx * wx + wy * wy + wz * wz);
+}
+
+static float branch_air(float x, float y, float z, float idx)
+{
+    float z0 = idx * -BRANCH_SPACING;
+    float a  = hash1(idx * 7.31f + g_seed) * 6.2831853f;
+    float lean = 0.35f + hash1(idx * 3.17f + g_seed) * 0.55f;
+    float cx, cy, ex, ey, ez;
+    tunnel_centre(z0, &cx, &cy);
+    ex = cx + (float)cos(a) * BRANCH_LEN;
+    ey = cy + (float)sin(a) * BRANCH_LEN * 0.45f;
+    ez = z0 - BRANCH_LEN * lean;
+    return BRANCH_RAD - seg_dist(x, y, z, cx, cy, z0, ex, ey, ez);
 }
 
 /* Positive in air, negative in rock, zero on the wall.
@@ -169,7 +216,15 @@ static float cave_sdf(float x, float y, float z)
     r  = (float)sqrt(dx * dx + dy * dy);
     rad = (2.35f - 0.95f * k)
         + 1.15f * g_rough * fbm2((float)atan2(dy, dx) * 1.6f, z * 0.42f + g_seed);
-    return rad - r;
+    {   /* whichever is more open here, the main passage or a branch */
+        float main_air = rad - r;
+        float i0 = (float)floor(-z / BRANCH_SPACING);
+        float b0 = branch_air(x, y, z, i0);
+        float b1 = branch_air(x, y, z, i0 + 1.0f);
+        if (b0 > main_air) main_air = b0;
+        if (b1 > main_air) main_air = b1;
+        return main_air;
+    }
 }
 
 /* March until we leave the air. The field is not a true distance function
@@ -330,7 +385,7 @@ static int mon_step(Monster *m, float dt, float now)
             if (d < 0.001f) d = 1.0f;
             m->dx = dx / d; m->dy = dy / d; m->dz = dz / d;
             m->state  = MON_CHARGING;
-            m->timer  = 6.0f;
+            m->timer  = 3.2f;
             m->travel = 0.0f;
         }
         break;
@@ -479,13 +534,13 @@ static void mon_emit_points(const Monster *m, float now)
          * few around it at every sample gives the limb a thickness that
          * tapers from a heavy haunch down to a fine tip - which is what makes
          * it look like something that could carry the body. */
-        for (k = 0; k < 48; k++) {
-            float u   = (float)k / 47.0f;
+        for (k = 0; k < 46; k++) {
+            float u   = (float)k / 45.0f;
             float iu  = 1.0f - u;
             float a   = 2.0f * iu * u * kx + u * u * ex;
             float b2  = 2.0f * iu * u * ky + u * u * ey;
             float c2  = 2.0f * iu * u * kz + u * u * ez;
-            float rad = (0.105f * iu * iu + 0.016f) * sc;
+            float rad = (0.175f * iu * iu + 0.028f) * sc;
             int   q;
             for (q = 0; q < LEG_TUBE; q++) {
                 float h  = (float)(i * 97 + k * 13 + q) * 1.31f + m->seed;
@@ -833,7 +888,7 @@ static void new_attempt(unsigned seed, float now)
 {
     g_rng    = seed ? seed : 1u;
     g_seed   = rndf() * 1000.0f;
-    g_wander = 0.75f + rndf() * 0.85f;      /* 0.75 .. 1.60 */
+    g_wander = 0.80f + rndf() * 0.45f;      /* 0.80 .. 1.25 */
     g_rough  = 0.70f + rndf() * 0.70f;      /* 0.70 .. 1.40 */
     g_count  = 0;
     g_lives  = START_LIVES;
