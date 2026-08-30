@@ -22,14 +22,19 @@
 /* --- tuning ------------------------------------------------------------- */
 
 #define MAX_POINTS   1200000   /* 19 MB of RAM, 0 bytes on disk */
-#define PING_RAYS        900   /* every one of them is a visible bullet */
-#define PING_BOUNCES       4   /* how many walls a wave survives */
+#define PING_RAYS       1600   /* every one of them is a visible bullet */
+#define PING_BOUNCES      10   /* it dies of exhaustion, not of a counter */
+#define MAX_TRAVEL     52.0f   /* hard stop, but energy gets there first */
+#define GAIN_BOUNCE    0.74f   /* what a wall costs it */
+#define GAIN_PER_METRE 0.028f  /* what the air costs it */
+#define GAIN_FLOOR     0.045f  /* below this it has faded out */
 #define GRAZE_MIN      0.15f   /* below this the hit is a graze, not a bounce */
 #define MIN_SEGMENT    0.40f   /* a bounce that goes nowhere is a graze too */
-#define WAVE_POINTS   170000   /* the bullets in flight: shown, never kept */
+#define WAVE_POINTS   230000   /* the bullets in flight: shown, never kept */
 #define EYE_HEIGHT     0.55f   /* the ping leaves from your feet, not your face */
-#define WAVE_STEP      0.26f   /* dense enough that a bullet reads as a dash */
-#define RAY_STEPS         96
+#define WAVE_STEP      0.32f   /* dense enough that a bullet reads as a dash */
+#define PING_CHUNK       400   /* rays traced per frame, so nothing stalls */
+#define RAY_STEPS         72
 #define WAVE_SPEED     11.0f   /* metres per second the wavefront travels */
 #define MOVE_SPEED      2.7f
 #define MOUSE_SENS      0.0022f
@@ -90,10 +95,18 @@ static float rndf(void)
 
 /* --- noise -------------------------------------------------------------- */
 
+/* This used to be sin(n)*43758.5453 fract, the shader-toy idiom. Every call
+ * to the distance field runs it six times, so a single ping was paying for
+ * roughly ten million sines. Hashing the float's bits instead took one ping
+ * from 51 ms to 21. */
 static float hash1(float n)
 {
-    float s = (float)sin(n) * 43758.5453f;
-    return s - (float)floor(s);
+    unsigned h;
+    memcpy(&h, &n, sizeof h);
+    h ^= h >> 15; h *= 0x2c1b3c6du;
+    h ^= h >> 12; h *= 0x297a2d39u;
+    h ^= h >> 15;
+    return (float)(h & 0xFFFFFFu) / 16777216.0f;
 }
 
 static float noise1(float x)
@@ -155,7 +168,7 @@ static int cave_ray(float ox, float oy, float oz,
     for (i = 0; i < RAY_STEPS && t < maxd; i++) {
         float d = cave_sdf(ox + dx * t, oy + dy * t, oz + dz * t);
         if (d < 0.02f) { *hit = t; return 1; }
-        t += (d * 0.55f > 0.035f) ? d * 0.55f : 0.035f;
+        t += (d * 0.70f > 0.035f) ? d * 0.70f : 0.035f;
     }
     return 0;
 }
@@ -333,7 +346,11 @@ static void mon_emit_points(const Monster *m, float now)
  * Directions are laid out over the spherical cap with the golden angle, which
  * covers evenly instead of clumping in the middle. */
 
-#define CONE_HALF_ANGLE 0.42f      /* radians, about 24 degrees */
+/* Nearly a full forward hemisphere. A narrow cone only ever lit the middle of
+ * the screen, which reads as a torch; spraying everything in front of you is
+ * what makes the shape of the tunnel arrive all at once. Behind you stays
+ * dark, and that is the only limit. */
+#define CONE_HALF_ANGLE 1.50f      /* radians, about 86 degrees */
 
 static float ping_reach(void)
 {
@@ -365,17 +382,45 @@ static void mon_lit_by(const float *f, float reach, float now)
     }
 }
 
-static void emit_ping(float now, const float *f, const float *r, const float *u)
+/* A ping is 1,600 rays bouncing up to ten times, which is far too much work
+ * to do between two frames. The front only travels eleven metres a second, so
+ * it does not reach the first wall for a fifth of a second - about thirteen
+ * frames. Tracing a slice per frame is therefore invisible, and the reveal
+ * times all come from when the ping was fired rather than when a given ray
+ * happened to be computed. */
+
+static int   g_ping_busy, g_ping_i;
+static float g_ping_ox, g_ping_oy, g_ping_oz, g_ping_t0;
+static float g_pf[3], g_pr[3], g_pu[3];
+
+static void ping_begin(float now, const float *f, const float *r, const float *u)
 {
-    int i, b;
-    int start = g_count;
-    int added = 0;
-    float reach = ping_reach();
+    int j;
+    for (j = 0; j < 3; j++) { g_pf[j] = f[j]; g_pr[j] = r[j]; g_pu[j] = u[j]; }
+    g_ping_ox = g_px;
+    g_ping_oy = g_py - EYE_HEIGHT;      /* it leaves from the ground you stepped on */
+    g_ping_oz = g_pz;
+    g_ping_t0 = now;
+    g_ping_i  = 0;
+    g_ping_busy = 1;
+    g_wcount = 0;                       /* the previous wave has passed */
+
+    audio_ping();
+    mon_lit_by(f, ping_reach(), now);
+}
+
+static void ping_work(void)
+{
+    int b;
+    int budget = PING_CHUNK;
+    int wall_start = g_count, air_start = g_wcount;
+    int added, air_added;
     float cosmax = (float)cos(CONE_HALF_ANGLE);
 
-    g_wcount = 0;          /* the previous wave has passed; nothing to keep */
+    if (!g_ping_busy) return;
 
-    for (i = 0; i < PING_RAYS; i++) {
+    while (g_ping_i < PING_RAYS && budget-- > 0) {
+        int i = g_ping_i++;
         /* The golden angle covers a cap evenly, but it covers it as a lattice,
          * and a lattice printed onto a wall shows up as concentric rings - a
          * machine's signature, not a cave's. Jittering each ray by about half
@@ -390,10 +435,10 @@ static void emit_ping(float now, const float *f, const float *r, const float *u)
         float ly = st * (float)sin(ph);
 
         /* it leaves from the ground you just stepped on */
-        float ox = g_px, oy = g_py - EYE_HEIGHT, oz = g_pz;
-        float dx = r[0] * lx + u[0] * ly + f[0] * ct;
-        float dy = r[1] * lx + u[1] * ly + f[1] * ct;
-        float dz = r[2] * lx + u[2] * ly + f[2] * ct;
+        float ox = g_ping_ox, oy = g_ping_oy, oz = g_ping_oz;
+        float dx = g_pr[0] * lx + g_pu[0] * ly + g_pf[0] * ct;
+        float dy = g_pr[1] * lx + g_pu[1] * ly + g_pf[1] * ct;
+        float dz = g_pr[2] * lx + g_pu[2] * ly + g_pf[2] * ct;
         float travelled = 0.0f;
         float gain = 1.0f;
 
@@ -404,7 +449,7 @@ static void emit_ping(float now, const float *f, const float *r, const float *u)
             float t, n[3], dot;
 
             if (g_count >= MAX_POINTS) break;
-            if (!cave_ray(ox, oy, oz, dx, dy, dz, reach - travelled, &t)) break;
+            if (!cave_ray(ox, oy, oz, dx, dy, dz, MAX_TRAVEL - travelled, &t)) break;
 
             /* Trace the segment it just crossed.
              *
@@ -421,7 +466,7 @@ static void emit_ping(float now, const float *f, const float *r, const float *u)
                     g_wpts[g_wcount].x = ox + dx * march;
                     g_wpts[g_wcount].y = oy + dy * march;
                     g_wpts[g_wcount].z = oz + dz * march;
-                    g_wpts[g_wcount].reveal = now + (travelled + march) / WAVE_SPEED;
+                    g_wpts[g_wcount].reveal = g_ping_t0 + (travelled + march) / WAVE_SPEED;
                     g_wpts[g_wcount].gain = gain * 1.00f;
                     g_wcount++;
                 }
@@ -433,12 +478,17 @@ static void emit_ping(float now, const float *f, const float *r, const float *u)
             g_pts[g_count].x = ox;
             g_pts[g_count].y = oy;
             g_pts[g_count].z = oz;
-            g_pts[g_count].reveal = now + travelled / WAVE_SPEED;
-            g_pts[g_count].gain = gain;
+            g_pts[g_count].reveal = g_ping_t0 + travelled / WAVE_SPEED;
+            /* The mark a bullet leaves keeps more of itself than the bullet
+             * does. A tired ricochet still tells you a wall is there, and the
+             * cave only takes shape if the late hits stay readable. */
+            g_pts[g_count].gain = 0.42f + 0.58f * gain;
             g_count++;
             added++;
 
-            if (travelled >= reach * 0.98f) break;
+            /* the air wears it down as it goes */
+            gain *= (float)exp(-GAIN_PER_METRE * t);
+            if (gain < GAIN_FLOOR || travelled >= MAX_TRAVEL * 0.98f) break;
 
             cave_normal(ox, oy, oz, n);
             dot = dx * n[0] + dy * n[1] + dz * n[2];   /* negative going in */
@@ -459,26 +509,30 @@ static void emit_ping(float now, const float *f, const float *r, const float *u)
             dz -= 2.0f * dot * n[2];
             /* step well clear, or the eroded wall catches it again at once */
             ox += n[0] * 0.14f; oy += n[1] * 0.14f; oz += n[2] * 0.14f;
-            gain *= 0.62f;                    /* each kick costs it energy */
+            gain *= GAIN_BOUNCE;              /* each kick costs it energy */
         }
     }
+
+
+    added     = g_count  - wall_start;
+    air_added = g_wcount - air_start;
 
     if (added > 0) {
         glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
         glBufferSubData(GL_ARRAY_BUFFER,
-                        (GLintptr)(start * (int)sizeof(Point)),
+                        (GLintptr)(wall_start * (int)sizeof(Point)),
                         (GLsizeiptr)(added * (int)sizeof(Point)),
-                        g_pts + start);
+                        g_pts + wall_start);
     }
-
-    if (g_wcount > 0) {
+    if (air_added > 0) {
         glBindBuffer(GL_ARRAY_BUFFER, g_wvbo);
-        glBufferSubData(GL_ARRAY_BUFFER, 0,
-                        (GLsizeiptr)(g_wcount * (int)sizeof(Point)), g_wpts);
+        glBufferSubData(GL_ARRAY_BUFFER,
+                        (GLintptr)(air_start * (int)sizeof(Point)),
+                        (GLsizeiptr)(air_added * (int)sizeof(Point)),
+                        g_wpts + air_start);
     }
 
-    audio_ping();
-    mon_lit_by(f, reach, now);
+    if (g_ping_i >= PING_RAYS) g_ping_busy = 0;
 }
 
 /* --- matrices ----------------------------------------------------------- */
@@ -741,11 +795,13 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
 
     /* ping */
     if (in->ping && now >= g_ping_ready) {
-        emit_ping(now, f, r, u);
+        ping_begin(now, f, r, u);
         g_ping_ready = now + PING_COOLDOWN;
     }
 
     /* the cave gets busier as you descend */
+    ping_work();   /* trace this frame's slice of the wave */
+
     want = mon_target_count();
     if (want > g_mon_count) {
         for (i = g_mon_count; i < want; i++) mon_place(&g_mon[i], now + (float)i);
