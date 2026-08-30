@@ -49,7 +49,8 @@
 #define START_LIVES        3
 #define DEPTH_FULL     140.0f  /* metres at which the cave is at its worst */
 
-#define MON_POINTS       900
+#define MON_POINTS      2400   /* limbs need volume, not a dotted line */
+#define LEG_TUBE           5   /* points around the curve at each sample */
 #define MAX_MON            4
 #define MON_KILL_DIST   1.05f
 #define WALL_HUG       0.34f   /* how far off the rock it rides */
@@ -69,7 +70,7 @@ static Point *g_wpts;          /* the wave in flight, a ring that nobody reads b
 static int    g_wcount;
 static GLuint g_vao, g_vbo, g_wvao, g_wvbo, g_mvao, g_mvbo, g_hvao, g_hvbo, g_prog;
 static GLint  u_vp, u_cam, u_time, u_monster, u_persist, u_flat, u_base;
-static Point  g_mpts[MON_POINTS];
+static Point *g_mpts;          /* heap: 48 KB of it has no business in the exe */
 
 /* --- state -------------------------------------------------------------- */
 
@@ -440,7 +441,7 @@ static void mon_emit_points(const Monster *m, float now)
 #define PUT(A, B, C, G)     do { if (w < MON_POINTS) {         g_mpts[w].x = m->x + f[0]*(A) + sd[0]*(B) + n[0]*(C);         g_mpts[w].y = m->y + f[1]*(A) + sd[1]*(B) + n[1]*(C);         g_mpts[w].z = m->z + f[2]*(A) + sd[2]*(B) + n[2]*(C);         g_mpts[w].reveal = now; g_mpts[w].gain = (G); w++; } } while (0)
 
     /* body: a squat abdomen and a smaller head slung forward */
-    for (i = 0; i < 150; i++) {
+    for (i = 0; i < 260; i++) {
         float a = hash1((float)i * 1.7f + m->seed) * 6.2831853f;
         float b = hash1((float)i * 3.1f + m->seed + 4.0f) * 3.1415927f;
         float r = 0.26f * sc * (float)pow(hash1((float)i * 5.3f + m->seed), 0.34);
@@ -448,7 +449,7 @@ static void mon_emit_points(const Monster *m, float now)
              r*(float)sin(b)*(float)sin(a),
              r*(float)cos(b) * 0.75f, 1.0f);
     }
-    for (i = 0; i < 55; i++) {
+    for (i = 0; i < 95; i++) {
         float a = hash1((float)i * 2.3f + m->seed + 9.0f) * 6.2831853f;
         float b = hash1((float)i * 4.7f + m->seed + 2.0f) * 3.1415927f;
         float r = 0.13f * sc;
@@ -474,13 +475,28 @@ static void mon_emit_points(const Monster *m, float now)
         float kx = along + swing * 0.40f, ky = side * reach * 0.46f, kz = 0.86f * sc;
         float ex = along + swing,         ey = side * reach,          ez = -0.34f * sc + lift;
 
-        for (k = 0; k < 72; k++) {
-            float u  = (float)k / 71.0f;
-            float iu = 1.0f - u;
-            float a  = 2.0f * iu * u * kx + u * u * ex;
-            float b2 = 2.0f * iu * u * ky + u * u * ey;
-            float c2 = 2.0f * iu * u * kz + u * u * ez;
-            PUT(a, b2, c2, 0.55f + 0.45f * iu);   /* thins out toward the foot */
+        /* A single line of points along the curve reads as wire. Scattering a
+         * few around it at every sample gives the limb a thickness that
+         * tapers from a heavy haunch down to a fine tip - which is what makes
+         * it look like something that could carry the body. */
+        for (k = 0; k < 48; k++) {
+            float u   = (float)k / 47.0f;
+            float iu  = 1.0f - u;
+            float a   = 2.0f * iu * u * kx + u * u * ex;
+            float b2  = 2.0f * iu * u * ky + u * u * ey;
+            float c2  = 2.0f * iu * u * kz + u * u * ez;
+            float rad = (0.105f * iu * iu + 0.016f) * sc;
+            int   q;
+            for (q = 0; q < LEG_TUBE; q++) {
+                float h  = (float)(i * 97 + k * 13 + q) * 1.31f + m->seed;
+                float aa = hash1(h) * 6.2831853f;
+                float bb = hash1(h + 3.7f) * 3.1415927f;
+                float rr = rad * (float)pow(hash1(h + 8.1f), 0.34);
+                PUT(a  + rr * (float)sin(bb) * (float)cos(aa),
+                    b2 + rr * (float)sin(bb) * (float)sin(aa),
+                    c2 + rr * (float)cos(bb),
+                    0.55f + 0.45f * iu);
+            }
         }
     }
 #undef PUT
@@ -505,7 +521,8 @@ static void mon_emit_points(const Monster *m, float now)
     for (i = w; i < MON_POINTS; i++) g_mpts[i].gain = 0.0f;
 
     glBindBuffer(GL_ARRAY_BUFFER, g_mvbo);
-    glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)sizeof g_mpts, g_mpts);
+    glBufferSubData(GL_ARRAY_BUFFER, 0,
+                    (GLsizeiptr)MON_POINTS * (GLsizeiptr)sizeof(Point), g_mpts);
 }
 
 /* --- ping ----------------------------------------------------------------
@@ -946,6 +963,7 @@ void game_init(unsigned seed)
     g_text_xy = (float *)malloc((size_t)TEXT_MAX_PTS * 2 * sizeof(float));
     g_wpts    = (Point *)malloc((size_t)WAVE_POINTS * sizeof(Point));
     g_hud     = (Point *)malloc((size_t)HUD_MAX * sizeof(Point));
+    g_mpts    = (Point *)malloc((size_t)MON_POINTS * sizeof(Point));
     g_flash = 0.0f;
 
     g_prog    = gfx_build_program(POINT_VS, POINT_FS);
@@ -983,7 +1001,9 @@ void game_init(unsigned seed)
     glGenVertexArrays(1, &g_mvao);
     glGenBuffers(1, &g_mvbo);
     glBindBuffer(GL_ARRAY_BUFFER, g_mvbo);
-    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)sizeof g_mpts, 0, GL_DYNAMIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER,
+                 (GLsizeiptr)MON_POINTS * (GLsizeiptr)sizeof(Point),
+                 0, GL_DYNAMIC_DRAW);
     setup_attribs(g_mvao, g_mvbo);
 
     glEnable(GL_PROGRAM_POINT_SIZE);
