@@ -18,5 +18,6 @@ void audio_stroke(void);   /* an arm pulling through the water */
 void audio_stroke(void);   /* an arm pulling through the water */
 void audio_submerged(int under);  /* everything above 500 Hz leaves */
 void audio_flatline(void);        /* the monitor giving up */
+void audio_defib(void);           /* the crash team, from the other side */
 
 #endif /* AUDIO_H */

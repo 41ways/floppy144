@@ -221,9 +221,9 @@ int plat_text_points(const char *str, int px, float *out_xy, int max_pts)
     if (!bmp || !bits) { DeleteDC(dc); return 0; }
     oldb = SelectObject(dc, bmp);
 
-    font = CreateFontA(px, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET,
+    font = CreateFontW(px, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET,
                        OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                       ANTIALIASED_QUALITY, FF_DONTCARE, "Consolas");
+                       ANTIALIASED_QUALITY, FF_DONTCARE, L"Malgun Gothic");
     oldf = (HFONT)SelectObject(dc, font);
 
     r.left = 0; r.top = 0; r.right = W; r.bottom = H;
@@ -231,7 +231,11 @@ int plat_text_points(const char *str, int px, float *out_xy, int max_pts)
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, RGB(255, 255, 255));
     SetTextAlign(dc, TA_CENTER | TA_TOP);
-    TextOutA(dc, W / 2, (H - px) / 2, str, (int)strlen(str));
+    {   /* the strings arrive as UTF-8; Korean has to survive the trip */
+        wchar_t wbuf[128];
+        int wn = MultiByteToWideChar(CP_UTF8, 0, str, -1, wbuf, 128);
+        TextOutW(dc, W / 2, (H - px) / 2, wbuf, wn > 0 ? wn - 1 : 0);
+    }
     GdiFlush();
 
     p = (unsigned *)bits;

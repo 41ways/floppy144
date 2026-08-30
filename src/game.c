@@ -78,7 +78,7 @@
 
 #define MON_POINTS      2800   /* limbs need volume, not a dotted line */
 #define LEG_TUBE           6   /* points around the curve at each sample */
-#define MAX_MON            4
+#define MAX_MON           12
 #define MON_KILL_DIST   1.05f
 #define WALL_HUG       0.34f   /* how far off the rock it rides */
 #define WEAVE_RATE      1.8f   /* how fast it swings side to side */
@@ -101,16 +101,17 @@ static int    g_wcount;
 static GLuint g_vao, g_vbo, g_wvao, g_wvbo, g_mvao, g_mvbo, g_hvao, g_hvbo,
               g_rvao, g_rvbo, g_prog, g_wake_prog, g_wvao_full;
 static GLint  u_vp, u_cam, u_time, u_monster, u_persist, u_flat, u_base, u_ink;
-static GLint  w_res, w_time, w_open, w_bright, w_sharp;
+static GLint  w_res, w_time, w_open, w_bright, w_sharp, w_lamp, w_lampb;
 static GLuint g_cave_prog;
 static GLint  c_res, c_cam, c_fwd, c_right, c_up, c_seed, c_wander,
-              c_rough, c_time, c_light, c_wet, c_room, c_bra, c_brb;
+              c_rough, c_time, c_light, c_wet, c_room, c_road, c_white,
+              c_bra, c_brb;
 static GLint  u_fade, u_grey;
 static Point *g_mpts;          /* heap: 48 KB of it has no business in the exe */
 
 /* --- state -------------------------------------------------------------- */
 
-enum { ST_TITLE, ST_PLAY, ST_SURFACE, ST_WAKE, ST_FLATLINE };
+enum { ST_TITLE, ST_PLAY, ST_SURFACE, ST_WAKE, ST_FLATLINE, ST_ROAD };
 static int g_state;
 
 extern int plat_text_points(const char *str, int px, float *out_xy, int max);
@@ -130,6 +131,12 @@ static float g_wake;
 static float g_surf;              /* 0..1 through a glimpse of the room */
 static float g_flat;              /* 0..1 through the flatline */
 static float g_stagef;            /* g_stage, arriving over ~2 s */
+static int   g_shock;             /* defibrillator hits taken so far */
+static float g_shockf;            /* their effect, arriving over seconds */
+static int   g_ev;                /* 0 calm, 1 horde closing, 2 aftermath */
+static float g_ev_t;
+static float g_guide_next;        /* the heartbeat that knows the way */
+static float g_road;
 static float g_dive;              /* the plunge at gate one */
 static int   g_pings;
 static float g_clarity;           /* how much of it resolves this time */
@@ -223,7 +230,7 @@ static float surface_mix(float z)
     if (t > 1.0f) t = 1.0f;
     t = t * t * (3.0f - 2.0f * t);
     /* a crossed gate brings some of it immediately */
-    ts = smoothstep01(1.8f, 3.3f, g_stagef) * 0.9f;
+    ts = smoothstep01(0.4f, 1.8f, g_shockf) * 0.9f;
     return t > ts ? t : ts;
 }
 
@@ -324,9 +331,15 @@ static float gate_bulge(float z)
         float t = d - GATES[i]; if (t < 0.0f) t = -t;
         if (t < best) { best = t; k = i; }
     }
-    if (best > GATE_W * 4.0f) return 0.0f;
-    dz = d - GATES[k];
-    return GATE_R * (float)exp(-(dz * dz) / (2.0f * GATE_W * GATE_W));
+    {
+        /* the first chamber is a hall with a pool in it, so it opens wider
+         * and longer than the others */
+        static const float R[4] = { 15.0f, GATE_R, GATE_R, 11.0f };
+        static const float W[4] = {  8.0f, GATE_W, GATE_W, GATE_W };
+        if (best > W[k] * 4.0f) return 0.0f;
+        dz = d - GATES[k];
+        return R[k] * (float)exp(-(dz * dz) / (2.0f * W[k] * W[k]));
+    }
 }
 
 static float cave_sdf(float x, float y, float z)
@@ -342,7 +355,7 @@ static float cave_sdf(float x, float y, float z)
         + gate_bulge(z);
     {   /* whichever is more open here, the main passage or a branch */
         float main_air = rad - r;
-        if (-z > GATE_END - 2.0f) {
+        if (-z > GATE_2 + 4.0f) {
             /* The hall. A ceiling you could touch, pillars on a seven-metre
              * grid, no walls to speak of - the same room over and over in
              * every direction, which is the whole architecture of the place
@@ -353,7 +366,7 @@ static float cave_sdf(float x, float y, float z)
             float ax = (float)fabs(mx), az = (float)fabs(mz);
             float pil = (ax > az ? ax : az) - 0.42f;
             float hall = slab < pil ? slab : pil;
-            float k2 = ((-z) - (GATE_END - 2.0f)) / 6.0f;
+            float k2 = ((-z) - (GATE_2 + 4.0f)) / 6.0f;
             if (k2 > 1.0f) k2 = 1.0f;
             main_air = main_air * (1.0f - k2) + hall * k2;
         }
@@ -1077,6 +1090,99 @@ static void ping_work(void)
     if (g_ping_i >= PING_RAYS) g_ping_busy = 0;
 }
 
+/* The wave that is not yours. Full sphere, three times the reach, marks so
+ * bright they hurt - and they close over in about two seconds, because this
+ * light was lent, not earned. Everything hunting you comes apart in it. */
+static void emit_defib(float now)
+{
+    int i, b;
+    int start = g_count;
+    int added = 0;
+
+    for (i = 0; i < 1400; i++) {
+        float k  = ((float)i + 0.5f) / 1400.0f;
+        float ct = 1.0f - 2.0f * k;
+        float st = (float)sqrt(1.0f - ct * ct);
+        float ph = 2.39996323f * (float)i;
+        float dx = st * (float)cos(ph), dy = ct, dz = st * (float)sin(ph);
+        float ox = g_px, oy = g_py, oz = g_pz;
+        float travelled = 0.0f, gain = 2.4f;
+
+        for (b = 0; b < 3; b++) {
+            float t, n2[3], dot2;
+            if (g_count >= MAX_POINTS) break;
+            if (!cave_ray(ox, oy, oz, dx, dy, dz, 46.0f - travelled, &t)) break;
+            ox += dx * t; oy += dy * t; oz += dz * t; travelled += t;
+            cave_normal(ox, oy, oz, n2);
+            {   int m2;
+                for (m2 = 0; m2 < 3 && g_count < MAX_POINTS; m2++) {
+                    float h = (float)(i * 31 + b * 7 + m2) * 1.7f;
+                    g_pts[g_count].x = ox + (hash1(h) - 0.5f) * 0.3f;
+                    g_pts[g_count].y = oy + (hash1(h + 2.0f) - 0.5f) * 0.3f;
+                    g_pts[g_count].z = oz + (hash1(h + 5.0f) - 0.5f) * 0.3f;
+                    g_pts[g_count].reveal = now + travelled / 34.0f;
+                    g_pts[g_count].gain = gain;
+                    g_count++; added++;
+                }
+            }
+            if (travelled > 44.0f) break;
+            dot2 = dx * n2[0] + dy * n2[1] + dz * n2[2];
+            dx -= 2.0f * dot2 * n2[0];
+            dy -= 2.0f * dot2 * n2[1];
+            dz -= 2.0f * dot2 * n2[2];
+            ox += n2[0] * 0.14f; oy += n2[1] * 0.14f; oz += n2[2] * 0.14f;
+            gain *= 0.85f;
+        }
+    }
+    if (added > 0) {
+        glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
+        glBufferSubData(GL_ARRAY_BUFFER,
+                        (GLintptr)(start * (int)sizeof(Point)),
+                        (GLsizeiptr)(added * (int)sizeof(Point)),
+                        g_pts + start);
+    }
+}
+
+/* A quieter cousin: every few seconds after the first shock, a cone of the
+ * same borrowed light leaves your chest toward the exit. The heart knows the
+ * way out; the marks it leaves fade like the shock's do. The pulses come
+ * quicker as the door gets closer, which is itself the hint. */
+static void emit_guide(float now)
+{
+    int i;
+    int start = g_count, added = 0;
+    float dxx, dyy, dzz, dl;
+    float doorx, doory;
+    tunnel_centre(-WAKE_Z + 4.0f, &doorx, &doory);
+    dxx = doorx - g_px; dyy = doory - g_py; dzz = (-WAKE_Z + 2.0f) - g_pz;
+    dl = (float)sqrt(dxx * dxx + dyy * dyy + dzz * dzz);
+    if (dl < 1.0f) return;
+    dxx /= dl; dyy /= dl; dzz /= dl;
+
+    for (i = 0; i < 240 && g_count < MAX_POINTS; i++) {
+        float j1 = (hash1((float)i * 1.91f + now) - 0.5f) * 0.55f;
+        float j2 = (hash1((float)i * 3.37f + now * 2.0f) - 0.5f) * 0.55f;
+        float rx = dxx + j1 * (dzz + 0.3f), ry = dyy + j2, rz = dzz - j1 * (dxx + 0.3f);
+        float rl = (float)sqrt(rx * rx + ry * ry + rz * rz), t;
+        rx /= rl; ry /= rl; rz /= rl;
+        if (!cave_ray(g_px, g_py, g_pz, rx, ry, rz, 26.0f, &t)) continue;
+        g_pts[g_count].x = g_px + rx * t;
+        g_pts[g_count].y = g_py + ry * t;
+        g_pts[g_count].z = g_pz + rz * t;
+        g_pts[g_count].reveal = now + t / 30.0f;
+        g_pts[g_count].gain = 2.0f;
+        g_count++; added++;
+    }
+    if (added > 0) {
+        glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
+        glBufferSubData(GL_ARRAY_BUFFER,
+                        (GLintptr)(start * (int)sizeof(Point)),
+                        (GLsizeiptr)(added * (int)sizeof(Point)),
+                        g_pts + start);
+    }
+    audio_beep();
+}
+
 /* --- matrices ----------------------------------------------------------- */
 
 static void mat4_persp(float *m, float fovy, float aspect, float zn, float zf)
@@ -1177,6 +1283,8 @@ static void new_attempt(unsigned seed, float now)
     g_stage_flash = 0.0f;
     g_stagef = (float)g_stage;
     g_dive = 0.0f;
+    g_shock = 0; g_shockf = 0.0f; g_ev = 0; g_ev_t = 0.0f;
+    g_guide_next = 0.0f; g_road = 0.0f;
     g_wake = 0.0f;
     respawn(now);
 }
@@ -1220,6 +1328,10 @@ static void title_line(const char *str, int px, float scale, float yoff,
 
 static void enter_title(float now)
 {
+    /* The spawn heading follows the tunnel, but the title is laid out in
+     * world axes - so with a rotated camera the word came up sheared.
+     * The title looks straight down -z, always. */
+    g_yaw = 0.0f; g_pitch = 0.0f;
     g_state = ST_TITLE;
     g_count = 0;
     title_line("SOUNDING",       150, 2.05f, 0.55f, 0.30f, now);
@@ -1501,6 +1613,8 @@ void game_init(unsigned seed, float start_depth)
     w_open   = glGetUniformLocation(g_wake_prog, "uOpen");
     w_bright = glGetUniformLocation(g_wake_prog, "uBright");
     w_sharp  = glGetUniformLocation(g_wake_prog, "uSharp");
+    w_lamp   = glGetUniformLocation(g_wake_prog, "uLamp");
+    w_lampb  = glGetUniformLocation(g_wake_prog, "uLampB");
     glGenVertexArrays(1, &g_wvao_full);
 
     g_cave_prog = gfx_build_program(WAKE_VS, CAVE_FS);   /* same fullscreen tri */
@@ -1516,6 +1630,8 @@ void game_init(unsigned seed, float start_depth)
     c_light  = glGetUniformLocation(g_cave_prog, "uLight");
     c_wet    = glGetUniformLocation(g_cave_prog, "uWet");
     c_room   = glGetUniformLocation(g_cave_prog, "uRoom");
+    c_road   = glGetUniformLocation(g_cave_prog, "uRoad");
+    c_white  = glGetUniformLocation(g_cave_prog, "uWhite");
     c_bra    = glGetUniformLocation(g_cave_prog, "uBrA");
     c_brb    = glGetUniformLocation(g_cave_prog, "uBrB");
 
@@ -1774,6 +1890,55 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
         return;
     }
 
+    if (g_state == ST_ROAD) {
+        /* Through the door there is no room - there is distance. You are
+         * carried down it, the hall repeating past you, and the world takes
+         * about four seconds to go entirely white. */
+        float wt;
+        g_road += dt;
+        g_pz   -= 6.8f * dt;
+        g_yaw  *= (float)exp(-dt * 3.0f);
+        g_pitch *= (float)exp(-dt * 3.0f);
+        wt = smoothstep01(1.1f, 3.6f, g_road);
+
+        glClearColor(wt, wt, wt, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        {
+            float bra[48], brb[48];
+            int b2;
+            basis(g_yaw, g_pitch, f, r, u);
+            for (b2 = 0; b2 < 16; b2++) {
+                bra[b2*3+0] = g_br[b2][0]; bra[b2*3+1] = g_br[b2][1]; bra[b2*3+2] = g_br[b2][2];
+                brb[b2*3+0] = g_br[b2][3]; brb[b2*3+1] = g_br[b2][4]; brb[b2*3+2] = g_br[b2][5];
+            }
+            glUseProgram(g_cave_prog);
+            glUniform2f(c_res, (float)width, (float)height);
+            glUniform3f(c_cam, g_px, g_py, g_pz);
+            glUniform3f(c_fwd, f[0], f[1], f[2]);
+            glUniform3f(c_right, r[0], r[1], r[2]);
+            glUniform3f(c_up, u[0], u[1], u[2]);
+            glUniform1f(c_seed, g_seed);
+            glUniform1f(c_wander, g_wander);
+            glUniform1f(c_rough, g_rough);
+            glUniform1f(c_time, now);
+            glUniform1f(c_light, 1.0f);
+            glUniform1f(c_wet, 0.0f);
+            glUniform1f(c_room, 1.0f);
+            glUniform1f(c_road, 1.0f);
+            glUniform1f(c_white, wt);
+            glUniform3fv(c_bra, 16, bra);
+            glUniform3fv(c_brb, 16, brb);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            glBindVertexArray(g_wvao_full);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+            glBlendFunc(GL_ONE, GL_ONE);
+            glUniform1f(c_road, 0.0f);
+            glUniform1f(c_white, 0.0f);
+        }
+        if (g_road > 4.1f) { g_state = ST_WAKE; g_wake = 0.0f; }
+        return;
+    }
+
     if (g_state == ST_WAKE) {
         /* Nine seconds, and the game runs backwards through everything it has
          * been. The cave dims out, a room marches in behind it, an eyelid
@@ -1781,21 +1946,25 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
          *
          * Each beat overlaps the next, so nothing cuts. */
         float w      = g_wake;
-        float sink   = 1.0f - smoothstep01(0.02f, 0.30f, w);   /* the cave leaving */
-        float room   = smoothstep01(0.12f, 0.50f, w);          /* the room arriving */
-        float open   = smoothstep01(0.34f, 0.78f, w);          /* the eye */
-        float bright = smoothstep01(0.58f, 1.00f, w);          /* the light */
-        float sharp  = smoothstep01(0.45f, 0.94f, w);
+        float sink   = 0.0f;                                   /* the road took the cave */
+        float lamp   = 1.0f - smoothstep01(0.235f, 0.245f, w); /* the last room but one */
+        float lampb  = 1.0f - smoothstep01(0.150f, 0.205f, w); /* its bulb dying */
+        float room   = smoothstep01(0.30f, 0.52f, w);
+        float open   = smoothstep01(0.36f, 0.72f, w);          /* the eye */
+        float bright = smoothstep01(0.60f, 1.00f, w);          /* the light */
+        float sharp  = smoothstep01(0.46f, 0.94f, w);
         char line[48];
 
-        g_wake += dt * 0.112f;                                 /* about nine seconds */
+        g_wake += dt * 0.082f;                                 /* about twelve seconds */
         if (g_wake > 1.0f) g_wake = 1.0f;
 
         glClearColor(0.01f, 0.012f, 0.018f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
-        if (room > 0.004f) {
+        if (room > 0.004f || lamp > 0.004f) {
             glUseProgram(g_wake_prog);
+            glUniform1f(w_lamp, lamp);
+            glUniform1f(w_lampb, lampb);
             glUniform2f(w_res, (float)width, (float)height);
             glUniform1f(w_time, now);
             glUniform1f(w_open, open);
@@ -1972,7 +2141,7 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
             g_stage++;
             g_stage_flash = 1.0f;
             if (g_stage >= 4) {
-                audio_beep();                  /* the corridor is ahead */
+                audio_hum();                   /* the exit is somewhere in this */
             } else if (g_stage == 1) {
                 /* Gate one is the waterline. No interlude - you go in.
                    The plunge is a shove downward, a flash of foam, and the
@@ -1981,9 +2150,39 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
                 g_vx = 0.0f; g_vy = -6.5f; g_vz = -2.0f;
                 g_flash = 0.35f;
             } else {
-                /* gates two and three land as a shift in the world itself -
-                   the cutaway to the room read as a non sequitur and is gone */
-                audio_beep();
+                /* Gates two and three are ambushes. You come up out of the
+                 * water (or round the bend), sound the room, and it is full
+                 * of them - and behind you is no way back. What saves you is
+                 * not yours: the crash team fires, and in here that arrives
+                 * as a wave that burns the horde down and lights the way. */
+                int hi;
+                float ang0 = (float)atan2(g_px - 0.0f, 1.0f);
+                g_ev = 1; g_ev_t = 1.55f;
+                g_mon_count = MAX_MON;
+                for (hi = 0; hi < MAX_MON; hi++) {
+                    Monster *hm = &g_mon[hi];
+                    float a = ang0 + (-0.9f + 1.8f * (float)hi / (float)(MAX_MON - 1));
+                    float pos[3], nn[3];
+                    wall_spot(g_pz - 7.0f - hash1((float)hi * 3.3f) * 9.0f, a, pos);
+                    hm->x = pos[0]; hm->y = pos[1]; hm->z = pos[2];
+                    cave_normal(hm->x, hm->y, hm->z, nn);
+                    hm->nx = nn[0]; hm->ny = nn[1]; hm->nz = nn[2];
+                    hm->seed = 11.7f + (float)hi * 1.618f;
+                    mon_make(hm, hi % 3, depth_k(g_pz));
+                    hm->tx = g_px; hm->ty = g_py; hm->tz = g_pz;
+                    hm->state = MON_CHARGING;
+                    hm->timer = 8.0f; hm->travel = 0.0f;
+                    hm->dash = 0.0f; hm->moving = 1; hm->group = hi & 1;
+                    {   int q;
+                        for (q = 0; q < 8; q++) {
+                            hm->foot[q][0] = hm->x - nn[0] * WALL_HUG;
+                            hm->foot[q][1] = hm->y - nn[1] * WALL_HUG;
+                            hm->foot[q][2] = hm->z - nn[2] * WALL_HUG;
+                            hm->ft[q] = 1.0f;
+                        }
+                    }
+                    if (hi < 3) audio_roar(hm->type);
+                }
             }
         }
     }
@@ -1991,16 +2190,46 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
     g_stagef += ((float)g_stage - g_stagef) * (1.0f - (float)exp(-dt * 1.6f));
     if (g_dive > 0.0f) g_dive -= dt * 0.8f;
 
-    /* the door at the end of the corridor */
+    /* the ambush, and the shock that answers it */
+    if (g_ev == 1) {
+        g_ev_t -= dt;
+        if (g_ev_t <= 0.0f) {
+            int di;
+            g_ev = 2; g_ev_t = 3.6f;
+            g_shock++;
+            g_flash = 1.4f;
+            audio_defib();
+            emit_defib(now);
+            for (di = 0; di < g_mon_count; di++)
+                if (g_mon[di].state == MON_CHARGING || g_mon[di].state == MON_WAKING) {
+                    g_mon[di].state = MON_BURST;
+                    g_mon[di].timer = BURST_TIME;
+                }
+        }
+    } else if (g_ev == 2) {
+        g_ev_t -= dt;
+        if (g_ev_t <= 0.0f) g_ev = 0;
+    }
+    g_shockf += ((float)g_shock - g_shockf) * (1.0f - (float)exp(-dt * 0.55f));
+
+    /* after the first shock the heart paces you toward the door */
+    if (g_shock >= 1 && g_ev == 0 && now >= g_guide_next) {
+        float ddx = g_px, ddz = g_pz + WAKE_Z;
+        float dd  = (float)sqrt(ddx * ddx + ddz * ddz);
+        emit_guide(now);
+        g_guide_next = now + 1.2f + dd * 0.045f;
+    }
+
+    /* the door at the end of the hall: an endless road behind it */
     if (-g_pz >= WAKE_Z - 1.6f && in->ping) {
-        g_state = ST_WAKE;
-        g_wake  = 0.0f;
+        g_state = ST_ROAD;
+        g_road  = 0.0f;
         audio_beep();
         return;
     }
 
-    /* ping */
-    if (in->ping && now >= g_ping_ready) {
+    /* ping - not during the ambush; that moment is not yours to light */
+    if (g_ev != 1 && in->ping && now >= g_ping_ready) {
         ping_begin(now, f, r, u);
         g_ping_ready = now + PING_COOLDOWN;
     }
@@ -2073,15 +2302,18 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
             glUniform1f(c_wander, g_wander);
             glUniform1f(c_rough, g_rough);
             glUniform1f(c_time, now);
-            {   /* Surfaces before the corridor are a sheen in the dark,
-                 * or sounding would stop meaning anything: the full light
-                 * belongs to stage four alone. */
-                float ls = smoothstep01(3.02f, 3.85f, g_stagef);
-                float dim = sm * 0.05f;   /* a sheen, not a reveal */
+            {   /* One shock buys a sheen; the second buys the light.
+                 * Between soundings the dark still rules until the end. */
+                float ls = smoothstep01(1.35f, 2.0f, g_shockf);
+                float dim = sm * 0.05f + smoothstep01(0.4f, 1.1f, g_shockf) * 0.10f;
                 glUniform1f(c_light, dim > ls ? dim : ls);
             }
             glUniform1f(c_wet, g_wet ? 1.0f : 0.0f);
-            glUniform1f(c_room, smoothstep01(GATE_3 + 8.0f, GATE_END - 4.0f, -g_pz));
+            {   /* each shock hardens the rock into hospital */
+                float rd2 = smoothstep01(GATE_3 + 8.0f, GATE_END - 4.0f, -g_pz);
+                float rs  = smoothstep01(0.3f, 2.0f, g_shockf);
+                glUniform1f(c_room, rd2 > rs ? rd2 : rs);
+            }
             glUniform3fv(c_bra, 16, bra);
             glUniform3fv(c_brb, 16, brb);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -2101,7 +2333,7 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
         {   /* grey rises with depth, but a crossed gate pulls it ahead, so
              * the change is felt at the boundary and not only along the way */
             float gd = smoothstep01(GATE_2, GATE_3 + 16.0f, -g_pz);
-            float gs = smoothstep01(1.7f, 3.2f, g_stagef);
+            float gs = smoothstep01(0.3f, 1.9f, g_shockf);
             glUniform1f(u_grey, gd > gs ? gd : gs);
         }
     }
@@ -2150,8 +2382,11 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
 
     {   /* the readout */
         char left[40], right[40];
-        const char *hint = (-g_pz >= WAKE_Z - 7.0f) ? "CLICK TO OPEN"
-                         : (g_has_moved ? "" : "WASD TO MOVE");
+        const char *hint = (g_ev == 2)
+                         ? (g_shock >= 2 ? "\xEB\x8F\x8C\xEC\x95\x84\xEC\x99\x80, \xEC\xa1\xb0\xea\xb8\x88\xeb\xa7\x8c \xeb\x8d\x94"
+                                         : "\xEC\xA0\x95\xEC\x8B\xA0 \xEC\xB0\xA8\xEB\xA0\xA4")
+                         : ((-g_pz >= WAKE_Z - 7.0f) ? "CLICK TO OPEN"
+                         : (g_has_moved ? "" : "WASD TO MOVE"));
         sprintf(left, g_wet ? "STAGE %d   %5.1f M  SUBMERGED"
                             : "STAGE %d   %5.1f M", g_stage + 1,
                 -g_pz < 0.0f ? 0.0f : -g_pz);

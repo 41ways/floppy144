@@ -36,14 +36,18 @@ static const char *POINT_VS =
 /* What it leaves behind. Only surfaces get this: the wave crossing open
    air is visible as it passes and then is simply gone, so the map that
    accumulates is walls and nothing else. */
-"  float memory = (age > 0.0 ? 0.88 : 0.0) * uPersist;\n"
+/* Two kinds of mark. Yours hold at near-full. The defibrillator kind -
+   flagged by a gain above 1.5 - land far brighter and close over in about
+   two seconds: that light was lent, not earned. */
+"  float memory = (aGain > 1.5 ? exp(-max(age, 0.0) / 1.15) * 1.2\n"
+"                              : 0.95) * (age > 0.0 ? 1.0 : 0.0) * uPersist;\n"
 /* a metre of free sight so the player never walks off a ledge blind */
 "  float close  = exp(-pow(d / 1.45, 2.0)) * 0.22 * uPersist;\n"
 /* uBase holds a thing lit whatever the wavefront is doing, so the title
    swells as the sweep crosses it and settles back rather than going
    dark and coming on again. */
 "  float lit = max(max(max(front, memory), close), uBase);\n"
-"  vBright = mix(lit, 1.0, uFlat) * aGain * uFade;\n"
+"  vBright = mix(lit, 1.0, uFlat) * min(aGain, 1.45) * uFade;\n"
 "  gl_PointSize = mix(clamp(230.0 / max(clip.w, 0.25), 2.0, 5.4), 2.0, uFlat);\n"
 "}\n";
 
@@ -104,6 +108,8 @@ static const char *WAKE_FS =
 "uniform float uOpen;    // eyelid, 0 shut to 1 wide\n"
 "uniform float uBright;  // how much light has come back\n"
 "uniform float uSharp;   // how much of it is holding still\n"
+"uniform float uLamp;    // 1: the room before the room\n"
+"uniform float uLampB;   // its bulb, until it is put out\n"
 "\n"
 "float h21(vec2 q){ uvec2 u = floatBitsToUint(q);\n"
 "  uint h = u.x * 0x2c1b3c6du ^ u.y * 0x297a2d39u;\n"
@@ -213,6 +219,39 @@ static const char *WAKE_FS =
 "void main(){\n"
 "  vec2 uv = (gl_FragCoord.xy - 0.5*uRes) / uRes.y;\n"
 "\n"
+
+/* Before the hospital there is a room with nothing in it but a lamp.
+   It reads as infinite because there is nothing to measure it by: a
+   floor, white fog, one bulb on a cord. When the bulb goes out you are
+   nowhere at all - and then the eye opens. */
+"  if (uLamp > 0.5) {\n"
+"    vec3 lro = vec3(0.0, 1.25, 4.0);\n"
+"    vec3 lrd = normalize(vec3(uv.x, uv.y + 0.06, -1.0));\n"
+"    vec3 L   = vec3(0.0, 2.30, -2.2);\n"
+"    vec3 lc  = vec3(0.0);\n"
+"    if (lrd.y < -0.001) {\n"
+"      float lt = -lro.y / lrd.y;\n"
+"      vec3 lp2 = lro + lrd * lt;\n"
+"      float ld2 = length(lp2 - vec3(L.x, 0.0, L.z));\n"
+"      float lit2 = uLampB / (1.0 + ld2 * ld2 * 0.10);\n"
+"      lc = vec3(0.99, 0.97, 0.92) * (0.06 + 1.1 * lit2);\n"
+"      lc = mix(lc, vec3(0.94) * (0.10 + 0.85 * uLampB),\n"
+"               smoothstep(4.0, 22.0, lt));\n"
+"    } else {\n"
+"      lc = vec3(0.93) * (0.05 + 0.80 * uLampB) * (1.0 - uv.y * 0.55);\n"
+"    }\n"
+"    vec3 toL = L - lro;\n"
+"    float bh = length(cross(lrd, normalize(toL)));\n"
+"    if (dot(lrd, normalize(toL)) > 0.0) {\n"
+"      if (bh < 0.020) lc = vec3(1.5, 1.42, 1.2) * (uLampB + 0.06);\n"
+"      else lc += vec3(1.0, 0.95, 0.8) * uLampB * 0.05 / (bh * 18.0 + 0.25);\n"
+"      if (abs(lrd.x * length(toL) - toL.x) < 0.006 && lrd.y * length(toL) > toL.y)\n"
+"        lc = vec3(0.10);\n"
+"    }\n"
+"    lc += (h21(gl_FragCoord.xy + uTime) - 0.5) * 0.030;\n"
+"    lc *= 1.0 - 0.28 * dot(uv, uv);\n"
+"    FragColor = vec4(clamp(lc, 0.0, 1.0), 1.0); return;\n"
+"  }\n"
 "  float lid  = uOpen * 0.62 * (1.0 - 0.55 * uv.x * uv.x);\n"
 "  float lash = smoothstep(lid, lid - 0.05, abs(uv.y + 0.02));\n"
 "  if (lash <= 0.001) { FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }\n"
@@ -296,6 +335,8 @@ static const char *CAVE_FS =
 "uniform float uLight;    // how much of it is lit from ahead\n"
 "uniform float uWet;      // stage two shines\n"
 "uniform float uRoom;     // the rock squaring into somewhere built\n"
+"uniform float uRoad;     // past the door: no walls end it\n"
+"uniform float uWhite;    // and the world goes to white\n"
 "\n"
 "uniform vec3  uBrA[16];\n"
 "uniform vec3  uBrB[16];\n"
@@ -316,8 +357,10 @@ static const char *CAVE_FS =
 "  float G[4] = float[4](120.0, 240.0, 360.0, 480.0);\n"
 "  for (int i = 0; i < 4; i++){ float t = abs(d - G[i]);\n"
 "    if (t < best) { best = t; k = i; } }\n"
-"  if (best > 20.0) return 0.0;\n"
-"  dz = d - G[k]; return 9.5 * exp(-(dz*dz)/50.0); }\n"
+"  float R[4] = float[4](15.0, 9.5, 9.5, 11.0);\n"
+"  float W[4] = float[4]( 8.0, 5.0, 5.0,  5.0);\n"
+"  if (best > W[k]*4.0) return 0.0;\n"
+"  dz = d - G[k]; return R[k] * exp(-(dz*dz)/(2.0*W[k]*W[k])); }\n"
 "float segd(vec3 p, vec3 a, vec3 b){ vec3 pa = p-a, ba = b-a;\n"
 "  float t = clamp(dot(pa,ba)/max(dot(ba,ba),1e-6), 0.0, 1.0);\n"
 "  return length(pa - ba*t); }\n"
@@ -337,7 +380,7 @@ static const char *CAVE_FS =
 "  float pil = max(abs(mp.x), abs(mp.y)) - 0.42;\n"
 "  float boxm = min(slab, pil);\n"
 "  m = mix(m, boxm, uRoom);\n"
-"  m = min(m, p.z + 525.0);\n"
+"  if (uRoad < 0.5) m = min(m, p.z + 525.0);\n"
 "  int i0 = int(clamp(-p.z/34.0, 0.0, 14.0));\n"
 "  m = max(m, 1.75 - segd(p, uBrA[i0],   uBrB[i0]));\n"
 "  m = max(m, 1.75 - segd(p, uBrA[i0+1], uBrB[i0+1]));\n"
@@ -387,7 +430,7 @@ static const char *CAVE_FS =
 "\n"
 "  vec3 alb = mix(vec3(0.20,0.19,0.185), vec3(0.44,0.39,0.34), g0);\n"
 /* the last thing the corridor shows you: a door, darker than its wall */
-"  if (p.z < -523.9) {\n"
+"  if (uRoad < 0.5 && p.z < -523.9) {\n"
 "    vec2 dc = centre(p.z);\n"
 "    if (abs(p.x - dc.x) < 0.62 && p.y - dc.y < 0.75 && p.y - dc.y > -1.55)\n"
 "      alb = vec3(0.24, 0.20, 0.16);\n"
@@ -443,6 +486,7 @@ static const char *CAVE_FS =
 "  col = mix(vec3(0.010,0.012,0.018) + warm*0.045*uLight, col, fog);\n"
 "  col = col / (col + vec3(0.9));\n"
 "  col = pow(max(col, vec3(0.0)), vec3(0.4545));\n"
+"  col = mix(col, vec3(1.0), uWhite);\n"
 "  FragColor = vec4(col, 1.0); }\n";
 
 #endif /* SHADERS_H */

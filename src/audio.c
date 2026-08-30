@@ -26,7 +26,7 @@
 #define AP_LEN       1051
 
 enum { V_PING, V_ROAR, V_ROAR_HI, V_ROAR_LO, V_HIT, V_BEEP, V_SPLASH, V_FLAT, V_HUM,
-       V_STROKE };
+       V_STROKE, V_DEFIB };
 
 typedef struct {
     int   active;
@@ -101,6 +101,22 @@ static float voice_sample(Voice *v)
         float sw  = (float)sin(3.1415927 * x);
         float res = (float)sin(6.2831853 * (150.0 + 90.0 * sw) * v->t);
         s = (frand() * 0.7f + res * 0.3f) * sw * sw * 0.34f;
+    } else if (v->kind == V_DEFIB) {
+        /* the whine of the charge, the thump of it landing, and two beats of
+         * a heart deciding to continue */
+        float t = v->t;
+        if (t < 0.55f) {
+            float f2 = 320.0f + 900.0f * (t / 0.55f);
+            s = (float)sin(6.2831853 * f2 * t) * 0.16f * (t / 0.55f);
+        } else if (t < 0.80f) {
+            float u2 = t - 0.55f;
+            s = ((float)sin(6.2831853 * 55.0 * u2) * 0.9f + frand() * 0.5f)
+              * (float)exp(-u2 * 11.0f);
+        } else {
+            float u2 = (float)fmod(t - 0.80f, 0.72f);
+            float amp = (t < 2.4f) ? 0.5f : 0.0f;
+            s = (float)sin(6.2831853 * 60.0 * u2) * (float)exp(-u2 * 16.0f) * amp;
+        }
     } else if (v->kind == V_HUM) {
         /* sixty-cycle light fixtures, forever */
         float env = (x < 0.10f ? x / 0.10f : (x > 0.9f ? (1.0f - x) / 0.1f : 1.0f));
@@ -261,6 +277,7 @@ void audio_roar(int type)
 }
 void audio_hum(void)  { voice_start(V_HUM, 24.0f); }
 void audio_stroke(void) { voice_start(V_STROKE, 0.62f); }
+void audio_defib(void)  { voice_start(V_DEFIB, 2.60f); }
 void audio_hit(void)  { voice_start(V_HIT,  0.55f); }
 void audio_beep(void) { voice_start(V_BEEP, 0.42f); }
 
