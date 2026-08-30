@@ -334,6 +334,28 @@ static const char *CAVE_FS =
 "  col += warm * fre * (0.02 + 0.14*uLight) * ao;\n"
 "  col += warm * pow(max(dot(reflect(-ld, n), -rd), 0.0), 34.0) * uWet * 0.65 * sh;\n"
 "\n"
+/* The kkrieger half of the look: the ceiling panels are not just painted on,
+   the nearest four of them are lights. Positions come from snapping to the
+   same seven-metre grid the geometry uses, so this costs no data at all -
+   diffuse plus a Blinn lobe each, falling off with distance squared. */
+"  if (uRoom > 0.15) {\n"
+"    vec2 base = floor((p.xz - vec2(3.5)) / 7.0) * 7.0 + vec2(3.5);\n"
+"    vec3 pan = vec3(1.00, 0.97, 0.86) * uRoom;\n"
+"    for (int px = 0; px < 2; px++)\n"
+"    for (int pz = 0; pz < 2; pz++) {\n"
+"      vec2 pcv = base + vec2(float(px), float(pz)) * 7.0;\n"
+"      vec3 plp = vec3(pcv.x, centre(pcv.y).y + 1.02, pcv.y);\n"
+"      vec3 pld = plp - p;\n"
+"      float pd2 = dot(pld, pld);\n"
+"      pld *= inversesqrt(max(pd2, 1e-4));\n"
+"      float att = 1.0 / (1.0 + pd2 * 0.10);\n"
+"      float pdif = max(dot(n, pld), 0.0);\n"
+"      vec3 hv = normalize(pld - rd);\n"
+"      float pspec = pow(max(dot(n, hv), 0.0), 26.0);\n"
+"      col += alb * pan * pdif * att * 0.85;\n"
+"      col += pan * pspec * att * 0.55;\n"
+"    }\n"
+"  }\n"
 "  float fog = exp(-t * (0.075 - 0.03*uLight));\n"
 "  col = mix(vec3(0.010,0.012,0.018) + warm*0.045*uLight, col, fog);\n"
 "  col = col / (col + vec3(0.9));\n"
