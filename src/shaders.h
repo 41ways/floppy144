@@ -51,6 +51,7 @@ static const char *POINT_FS =
 "in float vDist;\n"
 "uniform float uMonster;\n"
 "uniform float uFlat;\n"
+"uniform float uInk;\n"
 "out vec4 FragColor;\n"
 "void main(){\n"
 "  if (vBright < 0.02) discard;\n"
@@ -66,7 +67,10 @@ static const char *POINT_FS =
 /* the rock under your nose is already known - let the distance read */
 "  a *= mix(0.35 + 0.65 * smoothstep(0.5, 4.0, vDist), 1.0, uFlat);\n"
 "  a = mix(a, min(a * 2.2, 1.0), uMonster);\n"
-"  FragColor = vec4(c * a, 1.0);\n"
+/* Waking floods the screen white, and light added to white is still
+   white - so that one pass writes dark ink over it instead. */
+"  if (uInk > 0.5) { FragColor = vec4(0.04, 0.05, 0.08, a); }\n"
+"  else            { FragColor = vec4(c * a, 1.0); }\n"
 "}\n";
 
 #endif /* SHADERS_H */

@@ -39,15 +39,29 @@
 #define MUZZLE_DROP    0.12f   /* barely below the eye - see MUZZLE_FWD */
 #define MUZZLE_FWD     0.35f   /* and a step ahead, so they fly away from you */
 #define WAVE_STEP      0.32f   /* dense enough that a bullet reads as a dash */
-#define PING_CHUNK       400   /* rays traced per frame, so nothing stalls */
-#define RAY_STEPS         72
+/* The wave takes nearly five seconds to travel, so tracing it over a sixth of
+ * a second is invisible - and 400 rays a frame was costing 56 ms when the
+ * frame budget is 16.7. */
+#define PING_CHUNK       100   /* rays traced per frame, so nothing stalls */
+#define RAY_STEPS         56
 #define WAVE_SPEED     11.0f   /* metres per second the wavefront travels */
 #define MOVE_SPEED      4.3f
 #define MOUSE_SENS      0.0022f
 #define PING_COOLDOWN   0.45f
 
 #define START_LIVES        3
-#define DEPTH_FULL     140.0f  /* metres at which the cave is at its worst */
+/* Four thresholds and an end. Difficulty is a curve across the whole descent
+ * rather than one that flattens two thirds of the way down, and each gate is
+ * a chamber wide enough that the ping goes out and does not come back - which
+ * is the only announcement the game makes. */
+#define DEPTH_FULL     200.0f  /* metres at which the cave is at its worst */
+#define GATE_1          45.0f
+#define GATE_2          95.0f
+#define GATE_3         150.0f
+#define GATE_END       200.0f
+#define GATE_R           9.5f  /* how wide a threshold chamber opens */
+#define GATE_W           5.0f  /* and how long it runs
+ */
 
 #define MON_POINTS      2800   /* limbs need volume, not a dotted line */
 #define LEG_TUBE           6   /* points around the curve at each sample */
@@ -72,12 +86,12 @@ static int    g_count;
 static Point *g_wpts;          /* the wave in flight, a ring that nobody reads back */
 static int    g_wcount;
 static GLuint g_vao, g_vbo, g_wvao, g_wvbo, g_mvao, g_mvbo, g_hvao, g_hvbo, g_prog;
-static GLint  u_vp, u_cam, u_time, u_monster, u_persist, u_flat, u_base;
+static GLint  u_vp, u_cam, u_time, u_monster, u_persist, u_flat, u_base, u_ink;
 static Point *g_mpts;          /* heap: 48 KB of it has no business in the exe */
 
 /* --- state -------------------------------------------------------------- */
 
-enum { ST_TITLE, ST_PLAY };
+enum { ST_TITLE, ST_PLAY, ST_WAKE };
 static int g_state;
 
 extern int plat_text_points(const char *str, int px, float *out_xy, int max);
@@ -91,6 +105,9 @@ static float g_flash;
 static int   g_lives;
 static float g_best_depth;
 static float g_start_depth;
+static int   g_stage;
+static float g_stage_flash;
+static float g_wake;
 static int   g_has_moved;
 
 /* --- cave shape, rerolled every attempt --------------------------------- */
@@ -195,21 +212,58 @@ static float seg_dist(float px, float py, float pz,
     return (float)sqrt(wx * wx + wy * wy + wz * wz);
 }
 
-static float branch_air(float x, float y, float z, float idx)
+#define BRANCHES 9
+
+static float g_br[BRANCHES][6];   /* ax ay az bx by bz, worked out once */
+
+/* branch_air used to call tunnel_centre, which is three sines and three
+ * cosines - and the field is evaluated over a million times per ping. The
+ * segments are fixed for a given cave, so they are built once instead. */
+static void build_branches(void)
 {
-    float z0 = idx * -BRANCH_SPACING;
-    float a  = hash1(idx * 7.31f + g_seed) * 6.2831853f;
-    float lean = 0.35f + hash1(idx * 3.17f + g_seed) * 0.55f;
-    float cx, cy, ex, ey, ez;
-    tunnel_centre(z0, &cx, &cy);
-    ex = cx + (float)cos(a) * BRANCH_LEN;
-    ey = cy + (float)sin(a) * BRANCH_LEN * 0.45f;
-    ez = z0 - BRANCH_LEN * lean;
-    return BRANCH_RAD - seg_dist(x, y, z, cx, cy, z0, ex, ey, ez);
+    int i;
+    for (i = 0; i < BRANCHES; i++) {
+        float idx = (float)i;
+        float z0  = idx * -BRANCH_SPACING;
+        float a   = hash1(idx * 7.31f + g_seed) * 6.2831853f;
+        float ln  = 0.35f + hash1(idx * 3.17f + g_seed) * 0.55f;
+        float cx, cy;
+        tunnel_centre(z0, &cx, &cy);
+        g_br[i][0] = cx;
+        g_br[i][1] = cy;
+        g_br[i][2] = z0;
+        g_br[i][3] = cx + (float)cos(a) * BRANCH_LEN;
+        g_br[i][4] = cy + (float)sin(a) * BRANCH_LEN * 0.45f;
+        g_br[i][5] = z0 - BRANCH_LEN * ln;
+    }
 }
 
-/* Positive in air, negative in rock, zero on the wall.
- * The radius shrinks with depth, which is the whole difficulty curve. */
+static float branch_air(float x, float y, float z, int i)
+{
+    if (i < 0 || i >= BRANCHES) return -1000.0f;
+    return BRANCH_RAD - seg_dist(x, y, z,
+                                 g_br[i][0], g_br[i][1], g_br[i][2],
+                                 g_br[i][3], g_br[i][4], g_br[i][5]);
+}
+
+/* How much the passage opens out at this depth. Zero everywhere except at the
+ * thresholds, where it swells into a room. */
+static float gate_bulge(float z)
+{
+    static const float GATES[4] = { GATE_1, GATE_2, GATE_3, GATE_END };
+    float d = -z, best = 1e9f, dz;
+    int i, k = 0;
+    /* four exps per field lookup was three too many: only one gate can be
+     * within reach of any given depth */
+    for (i = 0; i < 4; i++) {
+        float t = d - GATES[i]; if (t < 0.0f) t = -t;
+        if (t < best) { best = t; k = i; }
+    }
+    if (best > GATE_W * 4.0f) return 0.0f;
+    dz = d - GATES[k];
+    return GATE_R * (float)exp(-(dz * dz) / (2.0f * GATE_W * GATE_W));
+}
+
 static float cave_sdf(float x, float y, float z)
 {
     float cx, cy, dx, dy, r, rad;
@@ -219,12 +273,13 @@ static float cave_sdf(float x, float y, float z)
     dy = (y - cy) * 1.25f;                       /* flatter than it is wide */
     r  = (float)sqrt(dx * dx + dy * dy);
     rad = (2.35f - 0.95f * k)
-        + 1.15f * g_rough * fbm2((float)atan2(dy, dx) * 1.6f, z * 0.42f + g_seed);
+        + 1.15f * g_rough * fbm2((float)atan2(dy, dx) * 1.6f, z * 0.42f + g_seed)
+        + gate_bulge(z);
     {   /* whichever is more open here, the main passage or a branch */
         float main_air = rad - r;
-        float i0 = (float)floor(-z / BRANCH_SPACING);
+        int   i0 = (int)(-z / BRANCH_SPACING);
         float b0 = branch_air(x, y, z, i0);
-        float b1 = branch_air(x, y, z, i0 + 1.0f);
+        float b1 = branch_air(x, y, z, i0 + 1);
         if (b0 > main_air) main_air = b0;
         if (b1 > main_air) main_air = b1;
         return main_air;
@@ -986,10 +1041,14 @@ static void new_attempt(unsigned seed, float now)
     g_seed   = rndf() * 1000.0f;
     g_wander = 0.80f + rndf() * 0.45f;      /* 0.80 .. 1.25 */
     g_rough  = 0.70f + rndf() * 0.70f;      /* 0.70 .. 1.40 */
+    build_branches();
     g_count  = 0;
     g_lives  = START_LIVES;
     g_best_depth = 0.0f;
     g_has_moved = 0;
+    g_stage = 0;
+    g_stage_flash = 0.0f;
+    g_wake = 0.0f;
     respawn(now);
 }
 
@@ -1125,6 +1184,7 @@ void game_init(unsigned seed, float start_depth)
     u_persist = glGetUniformLocation(g_prog, "uPersist");
     u_flat    = glGetUniformLocation(g_prog, "uFlat");
     u_base    = glGetUniformLocation(g_prog, "uBase");
+    u_ink     = glGetUniformLocation(g_prog, "uInk");
 
     glGenVertexArrays(1, &g_vao);
     glGenBuffers(1, &g_vbo);
@@ -1164,6 +1224,10 @@ void game_init(unsigned seed, float start_depth)
 
     g_start_depth = start_depth;
     new_attempt(seed, 0.0f);
+    /* a test build dropped in at depth is already past those thresholds */
+    while (g_stage < 4 && g_start_depth >= (g_stage == 0 ? GATE_1 :
+                          g_stage == 1 ? GATE_2 : g_stage == 2 ? GATE_3 : GATE_END))
+        g_stage++;
     enter_title(0.0f);
 }
 
@@ -1171,11 +1235,28 @@ void game_init(unsigned seed, float start_depth)
  * Axis-separated so walking into a wall slides along it instead of stopping
  * dead. There is no gravity yet: this build swims. */
 
+#define PLAYER_R 0.62f
+
+/* Testing each axis separately against a noisy field meant catching on every
+ * bump in the rock: one blocked axis simply stopped, so a wall you were
+ * brushing past held you. Move first, then push back out along the gradient -
+ * which slides along the surface instead of stopping dead on it. Twice,
+ * because one push can land you inside something else in a corner. */
 static void try_move(float dx, float dy, float dz)
 {
-    if (cave_sdf(g_px + dx, g_py, g_pz) > 0.42f) g_px += dx;
-    if (cave_sdf(g_px, g_py + dy, g_pz) > 0.42f) g_py += dy;
-    if (cave_sdf(g_px, g_py, g_pz + dz) > 0.42f) g_pz += dz;
+    float n[3], d;
+    int i;
+
+    g_px += dx; g_py += dy; g_pz += dz;
+
+    for (i = 0; i < 2; i++) {
+        d = cave_sdf(g_px, g_py, g_pz);
+        if (d >= PLAYER_R) break;
+        cave_normal(g_px, g_py, g_pz, n);
+        g_px += n[0] * (PLAYER_R - d);
+        g_py += n[1] * (PLAYER_R - d);
+        g_pz += n[2] * (PLAYER_R - d);
+    }
 }
 
 void game_frame(const GameInput *in, float dt, float now, int width, int height)
@@ -1185,6 +1266,57 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
     float proj[16], view[16], vp[16];
     float limit = 1.5533f;                       /* just under 89 degrees */
     int i, want;
+
+    if (g_state == ST_WAKE) {
+        /* The whole game is darkness with a few points in it. Waking is the
+         * one moment that is the other way round, so it needs no words. */
+        float w = g_wake;
+        char line[48];
+        g_wake += dt * 0.22f;
+        if (g_wake > 1.0f) g_wake = 1.0f;
+
+        glClearColor(0.02f + w * 0.98f, 0.03f + w * 0.97f, 0.05f + w * 0.95f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        if (g_count > 0 && w < 0.9f) {
+            mat4_persp(proj, 1.30f,
+                       (float)width / (height > 0 ? (float)height : 1.0f), 0.05f, 60.0f);
+            mat4_view(view, g_px, g_py, g_pz, g_yaw, g_pitch);
+            mat4_mul(vp, proj, view);
+            glUseProgram(g_prog);
+            glUniformMatrix4fv(u_vp, 1, GL_FALSE, vp);
+            glUniform3f(u_cam, g_px, g_py, g_pz);
+            glUniform1f(u_time, now);
+            glUniform1f(u_flat, 0.0f);
+            glUniform1f(u_base, 0.0f);
+            glUniform1f(u_monster, 0.0f);
+            glUniform1f(u_persist, 1.0f);
+            glBindVertexArray(g_vao);
+            glDrawArrays(GL_POINTS, 0, g_count);
+        }
+
+        if (w > 0.35f) {
+            sprintf(line, "BIS %d", 40 + (int)((w - 0.35f) / 0.65f * 60.0f));
+            hud_build("AWAKE", line, w > 0.9f ? "CLICK TO BEGIN AGAIN" : "");
+            if (g_hud_n > 0) {
+                glUseProgram(g_prog);
+                glUniform1f(u_time, now);
+                glUniform1f(u_monster, 0.0f);
+                glUniform1f(u_persist, 1.0f);
+                glUniform1f(u_flat, 1.0f);
+                glUniform1f(u_base, 0.0f);
+                glUniform1f(u_ink, 1.0f);
+                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                glBindVertexArray(g_hvao);
+                glDrawArrays(GL_POINTS, 0, g_hud_n);
+                glBlendFunc(GL_ONE, GL_ONE);
+                glUniform1f(u_ink, 0.0f);
+                glUniform1f(u_flat, 0.0f);
+            }
+        }
+        if (w >= 1.0f && in->ping) enter_title(now);
+        return;
+    }
 
     if (g_state == ST_TITLE) {
         if (in->ping) {
@@ -1247,6 +1379,20 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
 
     if (-g_pz > g_best_depth) g_best_depth = -g_pz;
 
+    {   /* thresholds passed, and the one that ends it */
+        static const float GATES[4] = { GATE_1, GATE_2, GATE_3, GATE_END };
+        while (g_stage < 4 && -g_pz >= GATES[g_stage]) {
+            g_stage++;
+            g_stage_flash = 1.0f;
+            audio_roar();                      /* the cave acknowledging it */
+            if (g_stage >= 4) {
+                g_state = ST_WAKE;             /* through, and surfacing */
+                g_wake  = 0.0f;
+            }
+        }
+    }
+    if (g_stage_flash > 0.0f) g_stage_flash -= dt * 0.55f;
+
     /* ping */
     if (in->ping && now >= g_ping_ready) {
         ping_begin(now, f, r, u);
@@ -1283,7 +1429,9 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
     if (g_flash < 0.0f) g_flash = 0.0f;
 
     /* draw */
-    glClearColor(0.008f + g_flash * 0.30f, 0.012f, 0.020f, 1.0f);
+    glClearColor(0.008f + g_flash * 0.30f + g_stage_flash * 0.05f,
+                 0.012f + g_stage_flash * 0.07f,
+                 0.020f + g_stage_flash * 0.09f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
     mat4_persp(proj, 1.30f,
@@ -1327,7 +1475,8 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
     {   /* the readout */
         char left[40], right[40];
         const char *hint = g_has_moved ? "" : "WASD TO MOVE";
-        sprintf(left, "DEPTH %5.1f M", -g_pz < 0.0f ? 0.0f : -g_pz);
+        sprintf(left, "STAGE %d   %5.1f M", g_stage + 1,
+                -g_pz < 0.0f ? 0.0f : -g_pz);
         sprintf(right, "LIFE %s", g_lives >= 3 ? "* * *"
                                 : (g_lives == 2 ? "* *" : (g_lives == 1 ? "*" : "-")));
         hud_build(left, right, hint);

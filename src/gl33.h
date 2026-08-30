@@ -23,6 +23,7 @@ typedef ptrdiff_t GLintptr;
 #define GL_ARRAY_BUFFER      0x8892
 #define GL_STATIC_DRAW       0x88E4
 #define GL_DYNAMIC_DRAW      0x88E8
+#define GL_ONE_MINUS_SRC_ALPHA 0x0303
 #define GL_PROGRAM_POINT_SIZE 0x8642
 #define GL_TEXTURE0          0x84C0
 #define GL_CLAMP_TO_EDGE     0x812F
