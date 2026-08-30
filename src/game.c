@@ -22,10 +22,12 @@
 /* --- tuning ------------------------------------------------------------- */
 
 #define MAX_POINTS   1200000   /* 19 MB of RAM, 0 bytes on disk */
-#define PING_RAYS       1600   /* every one of them is a visible bullet */
+#define PING_RAYS       1100   /* every one of them is a visible bullet */
 #define PING_BOUNCES      10   /* it dies of exhaustion, not of a counter */
 #define MAX_TRAVEL     52.0f   /* hard stop, but energy gets there first */
 #define GAIN_BOUNCE    0.74f   /* what a wall costs it */
+#define VERT_SPREAD    0.34f   /* the spray is much wider than it is tall */
+#define VERT_DAMP      0.50f   /* and a ricochet is pulled hard back toward level */
 #define GAIN_PER_METRE 0.028f  /* what the air costs it */
 #define GAIN_FLOOR     0.045f  /* below this it has faded out */
 #define GRAZE_MIN      0.15f   /* below this the hit is a graze, not a bounce */
@@ -436,11 +438,18 @@ static void ping_work(void)
 
         /* it leaves from the ground you just stepped on */
         float ox = g_ping_ox, oy = g_ping_oy, oz = g_ping_oz;
-        float dx = g_pr[0] * lx + g_pu[0] * ly + g_pf[0] * ct;
-        float dy = g_pr[1] * lx + g_pu[1] * ly + g_pf[1] * ct;
-        float dz = g_pr[2] * lx + g_pu[2] * ly + g_pf[2] * ct;
+        /* A bullet that goes straight up tells you about the ceiling, which is
+         * not what you are trying to find out. Squashing the vertical spread
+         * keeps most of them in the plane you actually walk through. */
+        float vy = ly * VERT_SPREAD;
+        float dx = g_pr[0] * lx + g_pu[0] * vy + g_pf[0] * ct;
+        float dy = g_pr[1] * lx + g_pu[1] * vy + g_pf[1] * ct;
+        float dz = g_pr[2] * lx + g_pu[2] * vy + g_pf[2] * ct;
+        float dl0 = (float)sqrt(dx * dx + dy * dy + dz * dz);
         float travelled = 0.0f;
         float gain = 1.0f;
+
+        if (dl0 > 1e-6f) { dx /= dl0; dy /= dl0; dz /= dl0; }
 
         /* Each ray keeps going after it lands. The distance it has covered so
          * far decides when the front gets there, so a wave visibly rounds a
@@ -507,6 +516,12 @@ static void ping_work(void)
             dx -= 2.0f * dot * n[0];
             dy -= 2.0f * dot * n[1];
             dz -= 2.0f * dot * n[2];
+            {   /* bleed off the vertical so ricochets keep running the tunnel */
+                float dl;
+                dy *= VERT_DAMP;
+                dl = (float)sqrt(dx * dx + dy * dy + dz * dz);
+                if (dl > 1e-6f) { dx /= dl; dy /= dl; dz /= dl; }
+            }
             /* step well clear, or the eroded wall catches it again at once */
             ox += n[0] * 0.14f; oy += n[1] * 0.14f; oz += n[2] * 0.14f;
             gain *= GAIN_BOUNCE;              /* each kick costs it energy */
@@ -654,7 +669,7 @@ static void enter_title(float now)
     g_state = ST_TITLE;
     g_count = 0;
     title_line("SOUNDING",       150, 2.05f, 0.55f, 0.30f, now);
-    title_line("CLICK TO START",  40, 2.05f, -1.15f, 1.10f, now);
+    title_line("WASD TO MOVE",    40, 2.05f, -1.15f, 1.10f, now);
 
     glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
     glBufferSubData(GL_ARRAY_BUFFER, 0,
@@ -747,9 +762,14 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
     if (g_state == ST_TITLE) {
         if (now > g_title_pulse) enter_title(now);   /* wash the wave over again */
         if (in->ping) {
+            /* the click that starts the game is also the first sounding, so
+             * the cave answers immediately instead of staying black */
             g_state = ST_PLAY;
             new_attempt((unsigned)(now * 100000.0f) ^ rnd(), now);
-            g_ping_ready = now + 0.35f;
+            basis(g_yaw, g_pitch, f, r, u);
+            ping_begin(now, f, r, u);
+            g_ping_ready = now + PING_COOLDOWN;
+            return;
         }
         glClearColor(0.008f, 0.012f, 0.020f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);

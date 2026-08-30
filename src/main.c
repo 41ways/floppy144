@@ -59,8 +59,10 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         }
         return 0;
     case WM_LBUTTONDOWN:
+        /* The click that grabs the mouse counts as a ping too. Otherwise the
+         * title needs two clicks and the first one appears to do nothing. */
         if (!g_captured) set_capture(hwnd, 1);
-        else g_ping = 1;
+        g_ping = 1;
         return 0;
     case WM_KILLFOCUS:
         set_capture(hwnd, 0);
