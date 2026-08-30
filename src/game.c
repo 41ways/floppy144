@@ -86,8 +86,10 @@ static int    g_count;
 static Point *g_wpts;          /* the wave in flight, a ring that nobody reads back */
 static int    g_wcount;
 static GLuint g_vao, g_vbo, g_wvao, g_wvbo, g_mvao, g_mvbo, g_hvao, g_hvbo,
-              g_rvao, g_rvbo, g_prog;
+              g_rvao, g_rvbo, g_prog, g_wake_prog, g_wvao_full;
 static GLint  u_vp, u_cam, u_time, u_monster, u_persist, u_flat, u_base, u_ink;
+static GLint  w_res, w_time, w_open, w_bright, w_sharp;
+static GLint  u_fade;
 static Point *g_mpts;          /* heap: 48 KB of it has no business in the exe */
 
 /* --- state -------------------------------------------------------------- */
@@ -165,6 +167,14 @@ static float fbm2(float a, float b)
 /* --- the cave ------------------------------------------------------------
  * How far down a point is, from 0 at the entrance to 1 at the worst depth.
  * Every difficulty dial in the game is a function of this one number. */
+
+static float smoothstep01(float a, float b, float x)
+{
+    float t = (x - a) / (b - a);
+    if (t < 0.0f) t = 0.0f;
+    if (t > 1.0f) t = 1.0f;
+    return t * t * (3.0f - 2.0f * t);
+}
 
 static float depth_k(float z)
 {
@@ -1153,6 +1163,26 @@ static void hud_line(const char *str, float scale, float cx, float cy, float bri
     }
 }
 
+/* Two lines centred inside the eyelid, for the one screen where the corners
+ * of the display are behind a closed eye. */
+static void hud_build_wake(const char *a, const char *b)
+{
+    char key[96];
+    sprintf(key, "W|%.28s|%.28s", a, b);
+    if (strcmp(key, g_hud_cache) == 0) return;
+    strncpy(g_hud_cache, key, sizeof g_hud_cache - 1);
+    g_hud_cache[sizeof g_hud_cache - 1] = 0;
+
+    g_hud_n = 0;
+    if (a[0]) hud_line(a, 0.150f, 0.0f,  0.10f, 0.85f);
+    if (b[0]) hud_line(b, 0.105f, 0.0f, -0.10f, 0.70f);
+    if (g_hud_n > 0) {
+        glBindBuffer(GL_ARRAY_BUFFER, g_hvbo);
+        glBufferSubData(GL_ARRAY_BUFFER, 0,
+                        (GLsizeiptr)(g_hud_n * (int)sizeof(Point)), g_hud);
+    }
+}
+
 static void hud_build(const char *left, const char *right, const char *hint)
 {
     char key[96];
@@ -1311,6 +1341,15 @@ void game_init(unsigned seed, float start_depth)
     u_flat    = glGetUniformLocation(g_prog, "uFlat");
     u_base    = glGetUniformLocation(g_prog, "uBase");
     u_ink     = glGetUniformLocation(g_prog, "uInk");
+    u_fade    = glGetUniformLocation(g_prog, "uFade");
+
+    g_wake_prog = gfx_build_program(WAKE_VS, WAKE_FS);
+    w_res    = glGetUniformLocation(g_wake_prog, "uRes");
+    w_time   = glGetUniformLocation(g_wake_prog, "uTime");
+    w_open   = glGetUniformLocation(g_wake_prog, "uOpen");
+    w_bright = glGetUniformLocation(g_wake_prog, "uBright");
+    w_sharp  = glGetUniformLocation(g_wake_prog, "uSharp");
+    glGenVertexArrays(1, &g_wvao_full);
 
     glGenVertexArrays(1, &g_vao);
     glGenBuffers(1, &g_vbo);
@@ -1349,6 +1388,9 @@ void game_init(unsigned seed, float start_depth)
                  (GLsizeiptr)MON_POINTS * (GLsizeiptr)sizeof(Point),
                  0, GL_DYNAMIC_DRAW);
     setup_attribs(g_mvao, g_mvbo);
+
+    glUseProgram(g_prog);
+    glUniform1f(u_fade, 1.0f);
 
     glEnable(GL_PROGRAM_POINT_SIZE);
     glEnable(GL_BLEND);
@@ -1457,17 +1499,39 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
     }
 
     if (g_state == ST_WAKE) {
-        /* The whole game is darkness with a few points in it. Waking is the
-         * one moment that is the other way round, so it needs no words. */
-        float w = g_wake;
+        /* Nine seconds, and the game runs backwards through everything it has
+         * been. The cave dims out, a room marches in behind it, an eyelid
+         * opens on the room, and the light that arrives is not one you made.
+         *
+         * Each beat overlaps the next, so nothing cuts. */
+        float w      = g_wake;
+        float sink   = 1.0f - smoothstep01(0.02f, 0.30f, w);   /* the cave leaving */
+        float room   = smoothstep01(0.12f, 0.50f, w);          /* the room arriving */
+        float open   = smoothstep01(0.34f, 0.78f, w);          /* the eye */
+        float bright = smoothstep01(0.58f, 1.00f, w);          /* the light */
+        float sharp  = smoothstep01(0.45f, 0.94f, w);
         char line[48];
-        g_wake += dt * 0.22f;
+
+        g_wake += dt * 0.112f;                                 /* about nine seconds */
         if (g_wake > 1.0f) g_wake = 1.0f;
 
-        glClearColor(0.02f + w * 0.98f, 0.03f + w * 0.97f, 0.05f + w * 0.95f, 1.0f);
+        glClearColor(0.01f, 0.012f, 0.018f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
-        if (g_count > 0 && w < 0.9f) {
+        if (room > 0.004f) {
+            glUseProgram(g_wake_prog);
+            glUniform2f(w_res, (float)width, (float)height);
+            glUniform1f(w_time, now);
+            glUniform1f(w_open, open);
+            glUniform1f(w_bright, bright);
+            glUniform1f(w_sharp, sharp);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            glBindVertexArray(g_wvao_full);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+            glBlendFunc(GL_ONE, GL_ONE);
+        }
+
+        if (sink > 0.01f && g_count > 0) {
             mat4_persp(proj, 1.30f,
                        (float)width / (height > 0 ? (float)height : 1.0f), 0.05f, 60.0f);
             mat4_view(view, g_px, g_py, g_pz, g_yaw, g_pitch);
@@ -1477,16 +1541,20 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
             glUniform3f(u_cam, g_px, g_py, g_pz);
             glUniform1f(u_time, now);
             glUniform1f(u_flat, 0.0f);
-            glUniform1f(u_base, 0.0f);
+            glUniform1f(u_ink, 0.0f);
             glUniform1f(u_monster, 0.0f);
             glUniform1f(u_persist, 1.0f);
+            glUniform1f(u_base, 0.0f);
+            glUniform1f(u_fade, sink);
             glBindVertexArray(g_vao);
             glDrawArrays(GL_POINTS, 0, g_count);
+            glUniform1f(u_fade, 1.0f);
         }
 
-        if (w > 0.35f) {
-            sprintf(line, "BIS %d", 40 + (int)((w - 0.35f) / 0.65f * 60.0f));
-            hud_build("AWAKE", line, w > 0.9f ? "CLICK TO BEGIN AGAIN" : "");
+        if (open > 0.82f) {
+            sprintf(line, w >= 1.0f ? "CLICK TO BEGIN AGAIN" : "BIS %d",
+                    40 + (int)(bright * 60.0f));
+            hud_build_wake("AWAKE", line);
             if (g_hud_n > 0) {
                 glUseProgram(g_prog);
                 glUniform1f(u_time, now);
@@ -1503,6 +1571,7 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
                 glUniform1f(u_flat, 0.0f);
             }
         }
+
         if (w >= 1.0f && in->ping) enter_title(now);
         return;
     }
