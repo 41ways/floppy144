@@ -750,9 +750,9 @@ static void hud_build(const char *left, const char *right, const char *hint)
     g_hud_cache[sizeof g_hud_cache - 1] = 0;
 
     g_hud_n = 0;
-    if (left[0])  hud_line(left,  0.055f, -0.74f,  0.90f, 0.62f);
-    if (right[0]) hud_line(right, 0.055f,  0.74f,  0.90f, 0.62f);
-    if (hint[0])  hud_line(hint,  0.048f,  0.00f, -0.72f, 0.50f);
+    if (left[0])  hud_line(left,  0.135f, -0.68f,  0.86f, 0.78f);
+    if (right[0]) hud_line(right, 0.135f,  0.70f,  0.86f, 0.78f);
+    if (hint[0])  hud_line(hint,  0.130f,  0.00f, -0.74f, 0.66f);
 
     if (g_hud_n > 0) {
         glBindBuffer(GL_ARRAY_BUFFER, g_hvbo);

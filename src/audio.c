@@ -16,10 +16,14 @@
 #define NBUF         8
 #define MAX_VOICES   8
 
-/* Two combs of coprime length. One alone rings like a pipe; two beat against
- * each other and read as a space with walls somewhere out there. */
-#define REV_A        6113
-#define REV_B        8971
+/* Three combs at coprime lengths, then an allpass to smear them. One comb
+ * alone rings like a pipe; three beat against each other and the allpass
+ * blurs the individual echoes into a space with no obvious walls. Lengths
+ * are 0.31, 0.42 and 0.56 seconds - a room you cannot see the end of. */
+#define REV_A        6899
+#define REV_B        9257
+#define REV_C       12409
+#define AP_LEN       1051
 
 enum { V_PING, V_ROAR, V_HIT };
 
@@ -37,9 +41,8 @@ static Voice    g_voices[MAX_VOICES];
 static unsigned g_rng = 0x1234567u;
 static int      g_ready;
 
-static float *g_reva, *g_revb;   /* heap: 60 KB of zeroes has no
-                                    business being in the exe */
-static int   g_ia, g_ib;
+static float *g_ra, *g_rb, *g_rc, *g_ap;
+static int    g_ia, g_ib, g_ic, g_iap;
 
 static float frand(void)
 {
@@ -61,21 +64,32 @@ static void voice_start(int kind, float dur)
     }
 }
 
-/* One sample of one voice. Everything is an envelope times an oscillator;
- * there is no sample data to load because there are no samples. */
+/* A struck bowl rather than a drop in water. Partials sit at non-integer
+ * ratios, which is what separates a bell from a note and reads as somewhere
+ * other than here; each one decays at its own rate so the sound darkens as it
+ * fades. Two copies four thousandths apart beat slowly against each other, so
+ * it never quite settles. */
+static const float BOWL_R[5] = { 1.000f, 1.503f, 2.011f, 2.978f, 4.213f };
+static const float BOWL_A[5] = { 1.000f, 0.520f, 0.300f, 0.170f, 0.095f };
+static const float BOWL_D[5] = { 1.000f, 1.650f, 2.350f, 3.300f, 4.600f };
+
 static float voice_sample(Voice *v)
 {
     float x = v->t / v->dur;          /* 0..1 through the voice */
     float s = 0.0f;
 
     if (v->kind == V_PING) {
-        /* A drop into still water. The pitch RISES as the cavity collapses -
-         * that rise is the whole reason a bloop reads as water and a falling
-         * chirp reads as a machine. */
-        float f    = 330.0f + 1150.0f * x * x;
-        float body = (float)sin(6.2831853 * f * v->t) * (float)exp(-x * 9.0);
-        float slap = frand() * (float)exp(-x * 55.0) * 0.35f;
-        s = body * 0.42f + slap;
+        float f0  = 132.0f;
+        float att = 1.0f - (float)exp(-v->t / 0.050);   /* swells, never clicks */
+        int k;
+        for (k = 0; k < 5; k++) {
+            float f = f0 * BOWL_R[k];
+            float e = (float)exp(-x * BOWL_D[k]);
+            s += BOWL_A[k] * e
+               * ((float)sin(6.2831853 * f * v->t)
+                + (float)sin(6.2831853 * f * 1.004 * v->t)) * 0.5f;
+        }
+        s = s * att * 0.52f + frand() * (float)exp(-x * 22.0f) * 0.045f;
     } else if (v->kind == V_ROAR) {
         /* low, detuned, and it slides down as it commits to the charge */
         float f   = 78.0f - 30.0f * x;
@@ -94,7 +108,7 @@ static void render(short *out, int n)
 {
     int i, j;
     for (i = 0; i < n; i++) {
-        float dry = 0.0f, wet, mix;
+        float dry = 0.0f, comb, apin, apout, mix;
 
         for (j = 0; j < MAX_VOICES; j++) {
             Voice *v = &g_voices[j];
@@ -104,19 +118,27 @@ static void render(short *out, int n)
             if (v->t >= v->dur) v->active = 0;
         }
 
-        /* The ping should not stop at the edge of the screen. Feeding it back
-         * through two delays makes it travel out, hit something, and come
-         * back - which is the sound of the mechanic, not decoration. */
-        wet = g_reva[g_ia] * 0.62f + g_revb[g_ib] * 0.48f;
-        g_reva[g_ia] = dry + g_revb[g_ib] * 0.34f;
-        g_revb[g_ib] = dry + g_reva[g_ia] * 0.30f;
+        /* The sound should not stop at the edge of the screen: it should go
+         * out into the dark and keep coming back for a while. */
+        comb = g_ra[g_ia] + g_rb[g_ib] + g_rc[g_ic];
+        g_ra[g_ia] = dry + g_ra[g_ia] * 0.71f;
+        g_rb[g_ib] = dry + g_rb[g_ib] * 0.67f;
+        g_rc[g_ic] = dry + g_rc[g_ic] * 0.63f;
         if (++g_ia >= REV_A) g_ia = 0;
         if (++g_ib >= REV_B) g_ib = 0;
+        if (++g_ic >= REV_C) g_ic = 0;
 
-        mix = dry + wet * 0.55f;
+        /* an allpass smears the three into one another so no single echo
+         * stands out and the tail stops sounding like a corridor */
+        apin  = comb * 0.230f;
+        apout = g_ap[g_iap] - apin * 0.62f;
+        g_ap[g_iap] = apin + apout * 0.62f;
+        if (++g_iap >= AP_LEN) g_iap = 0;
+
+        mix = dry * 0.78f + apout * 0.80f;
         if (mix >  1.0f) mix =  1.0f;
         if (mix < -1.0f) mix = -1.0f;
-        out[i] = (short)(mix * 27000.0f);
+        out[i] = (short)(mix * 26000.0f);
     }
 }
 
@@ -133,9 +155,11 @@ void audio_init(void)
     wf.nBlockAlign     = (WORD)(wf.nChannels * wf.wBitsPerSample / 8);
     wf.nAvgBytesPerSec = wf.nSamplesPerSec * wf.nBlockAlign;
 
-    g_reva = (float *)calloc(REV_A, sizeof(float));
-    g_revb = (float *)calloc(REV_B, sizeof(float));
-    if (!g_reva || !g_revb) { g_ready = 0; return; }
+    g_ra = (float *)calloc(REV_A, sizeof(float));
+    g_rb = (float *)calloc(REV_B, sizeof(float));
+    g_rc = (float *)calloc(REV_C, sizeof(float));
+    g_ap = (float *)calloc(AP_LEN, sizeof(float));
+    if (!g_ra || !g_rb || !g_rc || !g_ap) { g_ready = 0; return; }
 
     if (waveOutOpen(&g_wo, WAVE_MAPPER, &wf, 0, 0, CALLBACK_NULL) != MMSYSERR_NOERROR) {
         g_ready = 0;     /* no sound device: the game still plays, silently */
@@ -180,6 +204,6 @@ void audio_shutdown(void)
     g_ready = 0;
 }
 
-void audio_ping(void) { voice_start(V_PING, 0.55f); }
+void audio_ping(void) { voice_start(V_PING, 2.60f); }
 void audio_roar(void) { voice_start(V_ROAR, 1.70f); }
 void audio_hit(void)  { voice_start(V_HIT,  0.55f); }
