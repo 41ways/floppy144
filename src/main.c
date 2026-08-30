@@ -1,14 +1,17 @@
 /* main.c - platform layer.
- * Opens a window, gets a real OpenGL 3.3 core context out of WGL, and runs the
- * frame loop. Nothing here links against anything Windows does not already
- * ship, so the distribution stays a single .exe. */
+ * Opens a window, gets a real OpenGL 3.3 core context out of WGL, gathers
+ * input, and hands each frame to game.c. Nothing here links against anything
+ * Windows does not already ship, so the distribution stays a single .exe. */
 
 #define WIN32_LEAN_AND_MEAN
 #include "gl33.h"
-#include "shaders.h"
+#include "game.h"
+#include "audio.h"
 
-#define APP_TITLE   "SECTOR ZERO"
-#define APP_CLASS   "sz_window"
+#include <stdio.h>
+
+#define APP_TITLE   "SOUNDING"
+#define APP_CLASS   "sounding_window"
 #define WIN_W       1280
 #define WIN_H       720
 
@@ -20,14 +23,24 @@ static PFNWGLCHOOSEPIXELFORMATARB    p_wglChoosePixelFormatARB;
 static PFNWGLCREATECONTEXTATTRIBSARB p_wglCreateContextAttribsARB;
 static PFNWGLSWAPINTERVALEXT         p_wglSwapIntervalEXT;
 
-static int g_running = 1;
-static int g_width  = WIN_W;
-static int g_height = WIN_H;
+static int g_running  = 1;
+static int g_width    = WIN_W;
+static int g_height   = WIN_H;
+static int g_captured = 0;     /* mouse locked to the window centre */
+static int g_ping     = 0;     /* a click arrived since the last frame */
 
 static void fail(const char *msg)
 {
     MessageBoxA(0, msg, APP_TITLE " - startup failed", MB_OK | MB_ICONERROR);
     ExitProcess(1);
+}
+
+static void set_capture(HWND hwnd, int on)
+{
+    if (on == g_captured) return;
+    g_captured = on;
+    ShowCursor(on ? FALSE : TRUE);
+    if (on) SetCapture(hwnd); else ReleaseCapture();
 }
 
 static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
@@ -38,7 +51,17 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         g_running = 0;
         return 0;
     case WM_KEYDOWN:
-        if (wp == VK_ESCAPE) g_running = 0;
+        if (wp == VK_ESCAPE) {
+            if (g_captured) set_capture(hwnd, 0);
+            else g_running = 0;
+        }
+        return 0;
+    case WM_LBUTTONDOWN:
+        if (!g_captured) set_capture(hwnd, 1);
+        else g_ping = 1;
+        return 0;
+    case WM_KILLFOCUS:
+        set_capture(hwnd, 0);
         return 0;
     case WM_SIZE:
         g_width  = LOWORD(lp);
@@ -124,10 +147,11 @@ static GLuint compile(GLenum type, const char *src, const char *label)
     return sh;
 }
 
-static GLuint build_program(void)
+/* game.c calls this to turn its shader strings into a program. */
+GLuint gfx_build_program(const char *vs_src, const char *fs_src)
 {
-    GLuint vs   = compile(GL_VERTEX_SHADER,   VS_SRC, "Vertex");
-    GLuint fs   = compile(GL_FRAGMENT_SHADER, FS_SRC, "Fragment");
+    GLuint vs   = compile(GL_VERTEX_SHADER,   vs_src, "Vertex");
+    GLuint fs   = compile(GL_FRAGMENT_SHADER, fs_src, "Fragment");
     GLuint prog = glCreateProgram();
     GLint  ok   = 0;
 
@@ -147,6 +171,28 @@ static GLuint build_program(void)
     return prog;
 }
 
+/* Keep the pointer pinned to the middle of the window and read how far it
+ * tried to escape. Cheaper than raw input and good enough for a prototype. */
+static void read_mouse(HWND hwnd, float *dx, float *dy)
+{
+    POINT p, centre;
+    RECT  rc;
+
+    *dx = 0.0f;
+    *dy = 0.0f;
+    if (!g_captured) return;
+
+    GetClientRect(hwnd, &rc);
+    centre.x = (rc.right - rc.left) / 2;
+    centre.y = (rc.bottom - rc.top) / 2;
+    ClientToScreen(hwnd, &centre);
+
+    if (!GetCursorPos(&p)) return;
+    *dx = (float)(p.x - centre.x);
+    *dy = (float)(p.y - centre.y);
+    SetCursorPos(centre.x, centre.y);
+}
+
 int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 {
     WNDCLASSA wc;
@@ -154,13 +200,12 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     HDC    dc;
     HGLRC  rc;
     RECT   rect;
-    GLuint prog, vao;
-    GLint  u_res, u_time;
-    LARGE_INTEGER freq, start, now;
+    LARGE_INTEGER freq, start, prev_t, now_t;
     MSG    msg;
     PIXELFORMATDESCRIPTOR pfd;
     int    fmt = 0;
     UINT   fmt_count = 0;
+    float  title_timer = 0.0f;
 
     const int pf_attribs[] = {
         WGL_DRAW_TO_WINDOW_ARB, GL_TRUE,
@@ -232,21 +277,19 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 
     if (p_wglSwapIntervalEXT) p_wglSwapIntervalEXT(1);   /* vsync */
 
-    prog = build_program();
-    glGenVertexArrays(1, &vao);    /* core profile refuses to draw without one */
-    glBindVertexArray(vao);
-
-    u_res  = glGetUniformLocation(prog, "uRes");
-    u_time = glGetUniformLocation(prog, "uTime");
+    audio_init();
+    game_init();
 
     ShowWindow(hwnd, SW_SHOW);
     glViewport(0, 0, g_width, g_height);
 
     QueryPerformanceFrequency(&freq);
     QueryPerformanceCounter(&start);
+    prev_t = start;
 
     while (g_running) {
-        float t;
+        GameInput in;
+        float dt, now;
 
         while (PeekMessageA(&msg, 0, 0, 0, PM_REMOVE)) {
             if (msg.message == WM_QUIT) g_running = 0;
@@ -254,21 +297,39 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
             DispatchMessageA(&msg);
         }
 
-        QueryPerformanceCounter(&now);
-        t = (float)((double)(now.QuadPart - start.QuadPart) /
-                    (double)freq.QuadPart);
+        QueryPerformanceCounter(&now_t);
+        dt  = (float)((double)(now_t.QuadPart - prev_t.QuadPart) / (double)freq.QuadPart);
+        now = (float)((double)(now_t.QuadPart - start.QuadPart)  / (double)freq.QuadPart);
+        prev_t = now_t;
+        if (dt > 0.1f) dt = 0.1f;          /* never let a stall teleport you */
 
-        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
+        in.fwd   = g_captured && (GetAsyncKeyState('W') & 0x8000) ? 1 : 0;
+        in.back  = g_captured && (GetAsyncKeyState('S') & 0x8000) ? 1 : 0;
+        in.left  = g_captured && (GetAsyncKeyState('A') & 0x8000) ? 1 : 0;
+        in.right = g_captured && (GetAsyncKeyState('D') & 0x8000) ? 1 : 0;
+        in.ping  = g_ping;
+        g_ping   = 0;
+        read_mouse(hwnd, &in.mdx, &in.mdy);
 
-        glUseProgram(prog);
-        glUniform2f(u_res, (float)g_width, (float)g_height);
-        glUniform1f(u_time, t);
-        glDrawArrays(GL_TRIANGLES, 0, 3);
-
+        game_frame(&in, dt, now, g_width, g_height);
+        audio_update();
         SwapBuffers(dc);
+
+        /* no HUD yet, so the numbers that matter live in the title bar */
+        title_timer += dt;
+        if (title_timer > 0.25f) {
+            char t[160];
+            title_timer = 0.0f;
+            sprintf(t, "%s  -  %d points  -  depth %.1f m  -  hit %d  -  %s",
+                    APP_TITLE, game_point_count(), -game_depth(), game_hits(),
+                    g_captured ? "click to ping, Esc to release"
+                               : "click the window to look around");
+            SetWindowTextA(hwnd, t);
+        }
     }
 
+    set_capture(hwnd, 0);
+    audio_shutdown();
     wglMakeCurrent(0, 0);
     wglDeleteContext(rc);
     ReleaseDC(hwnd, dc);

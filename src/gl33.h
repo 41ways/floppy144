@@ -22,6 +22,8 @@ typedef ptrdiff_t GLintptr;
 #define GL_INFO_LOG_LENGTH   0x8B84
 #define GL_ARRAY_BUFFER      0x8892
 #define GL_STATIC_DRAW       0x88E4
+#define GL_DYNAMIC_DRAW      0x88E8
+#define GL_PROGRAM_POINT_SIZE 0x8642
 #define GL_TEXTURE0          0x84C0
 #define GL_CLAMP_TO_EDGE     0x812F
 #define GL_MULTISAMPLE       0x809D
@@ -63,6 +65,7 @@ typedef ptrdiff_t GLintptr;
   X(PFNGLGENBUFFERS,        void,    glGenBuffers,        (GLsizei, GLuint*)) \
   X(PFNGLBINDBUFFER,        void,    glBindBuffer,        (GLenum, GLuint)) \
   X(PFNGLBUFFERDATA,        void,    glBufferData,        (GLenum, GLsizeiptr, const void*, GLenum)) \
+  X(PFNGLBUFFERSUBDATA,     void,    glBufferSubData,     (GLenum, GLintptr, GLsizeiptr, const void*)) \
   X(PFNGLVERTEXATTRIBPOINTER, void,  glVertexAttribPointer, (GLuint, GLint, GLenum, GLboolean, GLsizei, const void*)) \
   X(PFNGLENABLEVERTEXATTRIBARRAY, void, glEnableVertexAttribArray, (GLuint)) \
   X(PFNGLGETUNIFORMLOCATION, GLint,  glGetUniformLocation, (GLuint, const GLchar*)) \

@@ -14,8 +14,8 @@ CC := x86_64-w64-mingw32-gcc
 endif
 
 OUT     := dist
-TARGET  := $(OUT)/SECTORZERO.exe
-SRC     := src/main.c src/gl33.c
+TARGET  := $(OUT)/SOUNDING.exe
+SRC     := src/main.c src/gl33.c src/game.c src/audio.c
 
 # -Os over -O2: on this codebase the size win is large and the speed cost is
 # nil, because the frame time lives in the shader, not in C.
@@ -34,7 +34,7 @@ LIBS    := -lopengl32 -lgdi32 -lwinmm -luser32
 
 all: $(TARGET)
 
-$(TARGET): $(SRC) src/gl33.h src/shaders.h
+$(TARGET): $(SRC) src/gl33.h src/shaders.h src/game.h src/audio.h
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) $(SRC) -o $@ $(LDFLAGS) $(LIBS)
 	@echo "built $@ -- $$(stat -c%s $@) bytes"
