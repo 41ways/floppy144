@@ -125,6 +125,8 @@ static float g_stage_flash;
 static float g_wake;
 static float g_surf;              /* 0..1 through a glimpse of the room */
 static float g_flat;              /* 0..1 through the flatline */
+static float g_stagef;            /* g_stage, arriving over ~2 s */
+static float g_dive;              /* the plunge at gate one */
 static int   g_pings;
 static float g_clarity;           /* how much of it resolves this time */
 static int   g_has_moved;
@@ -189,6 +191,14 @@ static float fbm2(float a, float b)
  * How far down a point is, from 0 at the entrance to 1 at the worst depth.
  * Every difficulty dial in the game is a function of this one number. */
 
+static float smoothstep01(float a, float b, float x)
+{
+    float t = (x - a) / (b - a);
+    if (t < 0.0f) t = 0.0f;
+    if (t > 1.0f) t = 1.0f;
+    return t * t * (3.0f - 2.0f * t);
+}
+
 /* Points give way to lit rock across stages three and four. Nothing is
  * switched: at 58 m it is all points, by 105 m it is nearly all surface, and
  * in between both are on screen at once - which is the whole idea. The light
@@ -198,17 +208,13 @@ static float surface_mix(float z)
 {
     float d = -z;
     float t = (d - GATE_2) / (GATE_END - 15.0f - GATE_2);
+    float ts;
     if (t < 0.0f) t = 0.0f;
     if (t > 1.0f) t = 1.0f;
-    return t * t * (3.0f - 2.0f * t);
-}
-
-static float smoothstep01(float a, float b, float x)
-{
-    float t = (x - a) / (b - a);
-    if (t < 0.0f) t = 0.0f;
-    if (t > 1.0f) t = 1.0f;
-    return t * t * (3.0f - 2.0f * t);
+    t = t * t * (3.0f - 2.0f * t);
+    /* a crossed gate brings some of it immediately */
+    ts = smoothstep01(1.8f, 3.3f, g_stagef) * 0.9f;
+    return t > ts ? t : ts;
 }
 
 static float depth_k(float z)
@@ -1131,6 +1137,8 @@ static void new_attempt(unsigned seed, float now)
                           g_stage == 1 ? GATE_2 : g_stage == 2 ? GATE_3 : GATE_END))
         g_stage++;
     g_stage_flash = 0.0f;
+    g_stagef = (float)g_stage;
+    g_dive = 0.0f;
     g_wake = 0.0f;
     respawn(now);
 }
@@ -1882,6 +1890,13 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
             if (g_stage >= 4) {
                 g_state = ST_WAKE;             /* through, and surfacing */
                 g_wake  = 0.0f;
+            } else if (g_stage == 1) {
+                /* Gate one is the waterline. No interlude - you go in.
+                   The plunge is a shove downward, a flash of foam, and the
+                   ears closing over; depth_is_wet picks it up from there. */
+                g_dive = 1.0f;
+                g_vx = 0.0f; g_vy = -6.5f; g_vz = -2.0f;
+                g_flash = 0.35f;
             } else {
                 /* the room comes up for a moment, and a little more of it
                    holds together than it did at the last threshold */
@@ -1895,6 +1910,8 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
         }
     }
     if (g_stage_flash > 0.0f) g_stage_flash -= dt * 0.55f;
+    g_stagef += ((float)g_stage - g_stagef) * (1.0f - (float)exp(-dt * 1.6f));
+    if (g_dive > 0.0f) g_dive -= dt * 0.8f;
 
     /* ping */
     if (in->ping && now >= g_ping_ready) {
@@ -1932,7 +1949,8 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
     if (g_flash < 0.0f) g_flash = 0.0f;
 
     /* draw */
-    glClearColor(0.008f + g_flash * 0.30f + g_stage_flash * 0.05f,
+    glClearColor(0.008f + g_flash * 0.30f + g_stage_flash * 0.05f
+                        + (g_dive > 0.0f ? g_dive * 0.10f : 0.0f),
                  0.012f + g_stage_flash * 0.07f,
                  0.020f + g_stage_flash * 0.09f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
@@ -1969,7 +1987,10 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
             glUniform1f(c_wander, g_wander);
             glUniform1f(c_rough, g_rough);
             glUniform1f(c_time, now);
-            glUniform1f(c_light, sm);
+            {   /* the light ahead also steps up at each gate */
+                float ls = smoothstep01(1.6f, 3.4f, g_stagef);
+                glUniform1f(c_light, sm > ls ? sm : ls * 0.85f);
+            }
             glUniform1f(c_wet, g_wet ? 1.0f : 0.0f);
             glUniform1f(c_room, smoothstep01(GATE_3 + 8.0f, GATE_END - 4.0f, -g_pz));
             glUniform3fv(c_bra, 9, bra);
@@ -1988,7 +2009,12 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
         glUniform1f(u_ink, 0.0f);
         /* and the points step back as it arrives */
         glUniform1f(u_fade, 1.0f - sm * 0.82f);
-        glUniform1f(u_grey, smoothstep01(GATE_2, GATE_3 + 16.0f, -g_pz));
+        {   /* grey rises with depth, but a crossed gate pulls it ahead, so
+             * the change is felt at the boundary and not only along the way */
+            float gd = smoothstep01(GATE_2, GATE_3 + 16.0f, -g_pz);
+            float gs = smoothstep01(1.7f, 3.2f, g_stagef);
+            glUniform1f(u_grey, gd > gs ? gd : gs);
+        }
     }
 
     /* the map: surfaces, and they stay */
