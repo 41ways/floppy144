@@ -24,6 +24,9 @@
 #define MAX_POINTS   1200000   /* 19 MB of RAM, 0 bytes on disk */
 #define PING_RAYS       6000
 #define PING_BOUNCES       3   /* how many walls a wave survives */
+#define WAVE_POINTS   240000   /* the front in mid-air: shown, never kept */
+#define WAVE_EVERY         3   /* only every Nth ray draws its flight path */
+#define WAVE_STEP      0.75f   /* metres between samples along a ray */
 #define RAY_STEPS         96
 #define WAVE_SPEED     11.0f   /* metres per second the wavefront travels */
 #define MOVE_SPEED      2.7f
@@ -43,8 +46,10 @@ typedef struct { float x, y, z, reveal, gain; } Point;   /* 20 bytes */
 
 static Point *g_pts;
 static int    g_count;
-static GLuint g_vao, g_vbo, g_mvao, g_mvbo, g_prog;
-static GLint  u_vp, u_cam, u_time, u_monster;
+static Point *g_wpts;          /* the wave in flight, a ring that nobody reads back */
+static int    g_wcount;
+static GLuint g_vao, g_vbo, g_wvao, g_wvbo, g_mvao, g_mvbo, g_prog;
+static GLint  u_vp, u_cam, u_time, u_monster, u_persist;
 static Point  g_mpts[MON_POINTS];
 
 /* --- state -------------------------------------------------------------- */
@@ -366,6 +371,8 @@ static void emit_ping(float now, const float *f, const float *r, const float *u)
     float reach = ping_reach();
     float cosmax = (float)cos(CONE_HALF_ANGLE);
 
+    g_wcount = 0;          /* the previous wave has passed; nothing to keep */
+
     for (i = 0; i < PING_RAYS; i++) {
         float k  = ((float)i + 0.5f) / (float)PING_RAYS;
         float ct = 1.0f - k * (1.0f - cosmax);            /* uniform on the cap */
@@ -389,6 +396,22 @@ static void emit_ping(float now, const float *f, const float *r, const float *u)
 
             if (g_count >= MAX_POINTS) break;
             if (!cave_ray(ox, oy, oz, dx, dy, dz, reach - travelled, &t)) break;
+
+            /* Trace the segment it just crossed. These are the only points
+             * that show the wave actually moving through the air, and they
+             * are drawn with uPersist = 0 so they vanish behind the front. */
+            if ((i % WAVE_EVERY) == 0) {
+                float march;
+                for (march = WAVE_STEP; march < t; march += WAVE_STEP) {
+                    if (g_wcount >= WAVE_POINTS) break;
+                    g_wpts[g_wcount].x = ox + dx * march;
+                    g_wpts[g_wcount].y = oy + dy * march;
+                    g_wpts[g_wcount].z = oz + dz * march;
+                    g_wpts[g_wcount].reveal = now + (travelled + march) / WAVE_SPEED;
+                    g_wpts[g_wcount].gain = gain * 0.42f;
+                    g_wcount++;
+                }
+            }
 
             ox += dx * t; oy += dy * t; oz += dz * t;
             travelled += t;
@@ -419,6 +442,12 @@ static void emit_ping(float now, const float *f, const float *r, const float *u)
                         (GLintptr)(start * (int)sizeof(Point)),
                         (GLsizeiptr)(added * (int)sizeof(Point)),
                         g_pts + start);
+    }
+
+    if (g_wcount > 0) {
+        glBindBuffer(GL_ARRAY_BUFFER, g_wvbo);
+        glBufferSubData(GL_ARRAY_BUFFER, 0,
+                        (GLsizeiptr)(g_wcount * (int)sizeof(Point)), g_wpts);
     }
 
     audio_ping();
@@ -574,6 +603,7 @@ void game_init(unsigned seed)
 {
     g_pts = (Point *)malloc((size_t)MAX_POINTS * sizeof(Point));
     g_text_xy = (float *)malloc((size_t)TEXT_MAX_PTS * 2 * sizeof(float));
+    g_wpts    = (Point *)malloc((size_t)WAVE_POINTS * sizeof(Point));
     g_flash = 0.0f;
 
     g_prog    = gfx_build_program(POINT_VS, POINT_FS);
@@ -581,6 +611,7 @@ void game_init(unsigned seed)
     u_cam     = glGetUniformLocation(g_prog, "uCam");
     u_time    = glGetUniformLocation(g_prog, "uTime");
     u_monster = glGetUniformLocation(g_prog, "uMonster");
+    u_persist = glGetUniformLocation(g_prog, "uPersist");
 
     glGenVertexArrays(1, &g_vao);
     glGenBuffers(1, &g_vbo);
@@ -589,6 +620,14 @@ void game_init(unsigned seed)
                  (GLsizeiptr)MAX_POINTS * (GLsizeiptr)sizeof(Point),
                  0, GL_DYNAMIC_DRAW);
     setup_attribs(g_vao, g_vbo);
+
+    glGenVertexArrays(1, &g_wvao);
+    glGenBuffers(1, &g_wvbo);
+    glBindBuffer(GL_ARRAY_BUFFER, g_wvbo);
+    glBufferData(GL_ARRAY_BUFFER,
+                 (GLsizeiptr)WAVE_POINTS * (GLsizeiptr)sizeof(Point),
+                 0, GL_DYNAMIC_DRAW);
+    setup_attribs(g_wvao, g_wvbo);
 
     glGenVertexArrays(1, &g_mvao);
     glGenBuffers(1, &g_mvbo);
@@ -644,6 +683,7 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
             glUniform3f(u_cam, g_px, g_py, g_pz);
             glUniform1f(u_time, now);
             glUniform1f(u_monster, 0.0f);
+            glUniform1f(u_persist, 1.0f);
             glBindVertexArray(g_vao);
             glDrawArrays(GL_POINTS, 0, g_count);
         }
@@ -720,13 +760,24 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
     glUniform3f(u_cam, g_px, g_py, g_pz);
     glUniform1f(u_time, now);
 
+    /* the map: surfaces, and they stay */
     if (g_count > 0) {
         glUniform1f(u_monster, 0.0f);
+        glUniform1f(u_persist, 1.0f);
         glBindVertexArray(g_vao);
         glDrawArrays(GL_POINTS, 0, g_count);
     }
 
+    /* the wave itself, crossing open air. Visible only while the front is on
+     * it, so it sweeps through and leaves the map exactly as it found it. */
+    if (g_wcount > 0) {
+        glUniform1f(u_persist, 0.0f);
+        glBindVertexArray(g_wvao);
+        glDrawArrays(GL_POINTS, 0, g_wcount);
+    }
+
     glUniform1f(u_monster, 1.0f);
+    glUniform1f(u_persist, 0.0f);
     glBindVertexArray(g_mvao);
     for (i = 0; i < g_mon_count; i++) {
         if (!mon_visible(&g_mon[i])) continue;

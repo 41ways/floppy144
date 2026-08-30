@@ -15,6 +15,7 @@ static const char *POINT_VS =
 "uniform mat4  uVP;\n"
 "uniform vec3  uCam;\n"
 "uniform float uTime;\n"
+"uniform float uPersist;\n"
 "out float vBright;\n"
 "out float vDist;\n"
 "void main(){\n"
@@ -25,10 +26,12 @@ static const char *POINT_VS =
 "  float age = uTime - aReveal;\n"
 /* the wavefront itself: a thin bright shell */
 "  float front  = exp(-pow(age / 0.13, 2.0));\n"
-/* what it leaves behind: faint, and it never fades */
-"  float memory = age > 0.0 ? 0.30 : 0.0;\n"
+/* What it leaves behind. Only surfaces get this: the wave crossing open
+   air is visible as it passes and then is simply gone, so the map that
+   accumulates is walls and nothing else. */
+"  float memory = (age > 0.0 ? 0.30 : 0.0) * uPersist;\n"
 /* a metre of free sight so the player never walks off a ledge blind */
-"  float close  = exp(-pow(d / 1.45, 2.0)) * 0.40;\n"
+"  float close  = exp(-pow(d / 1.45, 2.0)) * 0.40 * uPersist;\n"
 "  vBright = max(max(front, memory), close) * aGain;\n"
 "  gl_PointSize = clamp(90.0 / max(clip.w, 0.25), 1.0, 2.4);\n"
 "}\n";
