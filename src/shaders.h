@@ -67,7 +67,13 @@ static const char *POINT_FS =
 /* deeper down the palette drains toward the room it is becoming */
 "  c = mix(c, vec3(dot(c, vec3(0.35))) * vec3(1.02, 1.03, 1.06), uGrey);\n"
 /* the thing does not scatter like rock - it comes back red, and brighter */
-"  c = mix(c, vec3(1.00, 0.13, 0.07), uMonster);\n"
+/* uMonster carries which kind: 1 stalker, 2 rusher, 3 listener */
+"  if (uMonster > 0.5) {\n"
+"    vec3 mc = uMonster < 1.5 ? vec3(1.00, 0.42, 0.20)\n"
+"            : uMonster < 2.5 ? vec3(1.00, 0.07, 0.04)\n"
+"            : vec3(0.58, 0.04, 0.30);\n"
+"    c = mc;\n"
+"  }\n"
 "  float a = vBright * exp(-vDist * 0.055);\n"
 /* the rock under your nose is already known - let the distance read */
 "  a *= mix(0.72 + 0.28 * smoothstep(0.5, 4.0, vDist), 1.0, uFlat);\n"
@@ -243,10 +249,12 @@ static const char *CAVE_FS =
 /* Toward the end the tunnel forgets how to be a tunnel. A box corridor
    with the same axis takes over, corners first: the cave becomes
    architecture around you before there is a room. */
-"  vec2 q = abs(vec2(p.x - c.x, p.y - c.y)) - vec2(2.30, 1.75);\n"
-"  float boxm = -max(q.x, q.y);\n"
+"  float slab = 1.45 - abs(p.y - c.y + 0.3);\n"
+"  vec2 mp = mod(p.xz + 3.5, 7.0) - 3.5;\n"
+"  float pil = max(abs(mp.x), abs(mp.y)) - 0.42;\n"
+"  float boxm = min(slab, pil);\n"
 "  m = mix(m, boxm, uRoom);\n"
-"  m = min(m, p.z + 497.0);\n"
+"  m = min(m, p.z + 525.0);\n"
 "  int i0 = int(clamp(-p.z/34.0, 0.0, 14.0));\n"
 "  m = max(m, 1.75 - segd(p, uBrA[i0],   uBrB[i0]));\n"
 "  m = max(m, 1.75 - segd(p, uBrA[i0+1], uBrB[i0+1]));\n"
@@ -296,24 +304,29 @@ static const char *CAVE_FS =
 "\n"
 "  vec3 alb = mix(vec3(0.20,0.19,0.185), vec3(0.44,0.39,0.34), g0);\n"
 /* the last thing the corridor shows you: a door, darker than its wall */
-"  if (p.z < -495.9) {\n"
+"  if (p.z < -523.9) {\n"
 "    vec2 dc = centre(p.z);\n"
 "    if (abs(p.x - dc.x) < 0.62 && p.y - dc.y < 0.75 && p.y - dc.y > -1.55)\n"
 "      alb = vec3(0.24, 0.20, 0.16);\n"
 "  }\n"
 "  alb = mix(alb, vec3(0.30,0.34,0.38), uWet*0.55);\n"
 /* built surfaces are pale and even; the grain fades with the rock */
-"  alb = mix(alb, vec3(0.78, 0.79, 0.81), uRoom * 0.85);\n"
+"  alb = mix(alb, vec3(0.84, 0.79, 0.55), uRoom * 0.9);\n"
+/* ceiling panels on the same seven-metre grid as the pillars */
+"  if (uRoom > 0.5 && n.y < -0.7) {\n"
+"    vec2 pm = abs(mod(p.xz, 7.0) - 3.5);\n"
+"    if (max(pm.x, pm.y) < 1.1) alb = vec3(1.35, 1.33, 1.22);\n"
+"  }\n"
 "\n"
 "  vec2 lc = centre(uCam.z - 20.0);\n"
-"  vec3 lp = vec3(lc.x, lc.y + 0.6, max(uCam.z - 20.0, -494.5));\n"
+"  vec3 lp = vec3(lc.x, lc.y + 0.6, max(uCam.z - 20.0, -521.5));\n"
 "  vec3 ld = normalize(lp - p);\n"
 "  float dif = max(dot(n, ld), 0.0);\n"
 "  float sh  = shade_to(p, ld);\n"
 "  float ao  = occl(p, n);\n"
 "  float fre = pow(1.0 - max(dot(n, -rd), 0.0), 3.0);\n"
 "\n"
-"  vec3 warm = mix(vec3(1.00, 0.93, 0.82), vec3(0.97, 0.98, 1.00), uRoom);\n"
+"  vec3 warm = mix(vec3(1.00, 0.93, 0.82), vec3(1.00, 0.96, 0.84), uRoom);\n"
 /* No ambient floor: a surface no light reaches stays black, or the
    sounding would stop being the way you see. The corridor doubles it. */
 "  vec3 col  = alb * uLight * (0.19 + 0.42*uRoom) * ao;\n"

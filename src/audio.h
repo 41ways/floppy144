@@ -9,7 +9,8 @@ void audio_update(void);   /* call once per frame: refills finished buffers */
 void audio_shutdown(void);
 
 void audio_ping(void);     /* the chirp you send out */
-void audio_roar(void);     /* it heard you */
+void audio_roar(int type); /* it heard you - each kind in its own voice */
+void audio_hum(void);      /* the hall: fluorescent, endless */
 void audio_hit(void);      /* it reached you */
 void audio_beep(void);     /* the monitor, from the other side */
 void audio_splash(void);   /* going under */

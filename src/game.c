@@ -70,7 +70,7 @@
 #define GATE_END       480.0f
 /* Past the last gate the corridor runs on to a door. Opening it is the
  * ending; the eyelid sequence starts from the handle, not from a depth. */
-#define WAKE_Z        (GATE_END + 17.0f)
+#define WAKE_Z        (GATE_END + 46.0f)
 #define GATE_R           9.5f  /* how wide a threshold chamber opens */
 #define GATE_W           5.0f  /* and how long it runs
  */
@@ -335,7 +335,22 @@ static float cave_sdf(float x, float y, float z)
         + gate_bulge(z);
     {   /* whichever is more open here, the main passage or a branch */
         float main_air = rad - r;
-        {   /* the corridor ends at the door */
+        if (-z > GATE_END - 2.0f) {
+            /* The hall. A ceiling you could touch, pillars on a seven-metre
+             * grid, no walls to speak of - the same room over and over in
+             * every direction, which is the whole architecture of the place
+             * you are almost out of. */
+            float slab = 1.45f - (float)fabs(y - cy + 0.3f);
+            float mx = (float)fmod(fmod(x, 7.0f) + 10.5f, 7.0f) - 3.5f;
+            float mz = (float)fmod(fmod(z, 7.0f) + 10.5f, 7.0f) - 3.5f;
+            float ax = (float)fabs(mx), az = (float)fabs(mz);
+            float pil = (ax > az ? ax : az) - 0.42f;
+            float hall = slab < pil ? slab : pil;
+            float k2 = ((-z) - (GATE_END - 2.0f)) / 6.0f;
+            if (k2 > 1.0f) k2 = 1.0f;
+            main_air = main_air * (1.0f - k2) + hall * k2;
+        }
+        {   /* and it ends at the door */
             float wall = z + WAKE_Z;
             if (wall < main_air) main_air = wall;
         }
@@ -414,22 +429,22 @@ static void mon_make(Monster *m, int type, float k)
         m->speed   = 5.4f + 1.6f * k;
         m->warn    = 0.42f - 0.12f * k;
         m->hear    = 19.0f;
-        m->scale   = 1.15f;
-        m->legspan = 1.00f;
+        m->scale   = 1.55f;      /* unmistakably the large one */
+        m->legspan = 0.80f;      /* stocky, low, dense */
         break;
     case T_LISTENER:    /* slow and generous, but hears you from far away */
         m->speed   = 3.5f + 0.8f * k;
         m->warn    = 0.72f;
         m->hear    = 32.0f + 8.0f * k;
-        m->scale   = 0.80f;
-        m->legspan = 2.10f;      /* a harvestman: mostly leg */
+        m->scale   = 0.70f;
+        m->legspan = 3.10f;      /* stilts radiating from almost no body */
         break;
     default:            /* T_STALKER - the small one you learn the game on */
         m->speed   = 4.4f + 1.5f * k;
         m->warn    = 0.58f - 0.16f * k;
         m->hear    = 24.0f + 8.0f * k;
-        m->scale   = 0.55f;
-        m->legspan = 1.00f;
+        m->scale   = 0.42f;      /* the small quick one */
+        m->legspan = 1.30f;
         break;
     }
 }
@@ -512,7 +527,7 @@ static int mon_step(Monster *m, float dt, float now)
         if (m->wake > 0.0f && now >= m->wake) {
             m->state = MON_WAKING;
             m->timer = m->warn;
-            audio_roar();
+            audio_roar(m->type);
         }
         break;
 
@@ -562,14 +577,15 @@ static int mon_step(Monster *m, float dt, float now)
          * bursts with a beat of stillness between them, which is most of
          * what makes an insect look like an insect. */
         m->dash -= dt;
-        if (m->dash <= 0.0f) {
+        if (m->type == T_LISTENER) { m->moving = 1; }
+        else if (m->dash <= 0.0f) {
             m->moving = !m->moving;
             m->dash = m->moving
                     ? DASH_ON  + hash1(now * 13.0f + m->seed) * 0.20f
                     : DASH_OFF + hash1(now * 17.0f + m->seed) * 0.16f;
         }
 
-        step = m->moving ? m->speed * 1.75f * dt : 0.0f;
+        step = m->moving ? m->speed * (m->type == T_LISTENER ? 1.0f : 1.75f) * dt : 0.0f;
         m->x += m->dx * step;
         m->y += m->dy * step;
         m->z += m->dz * step;
@@ -725,7 +741,7 @@ static void mon_emit_points(const Monster *m, float now)
 #define PUT(A, B, C, G)     do { if (w < MON_POINTS) {         g_mpts[w].x = m->x + f[0]*(A) + sd[0]*(B) + n[0]*(C);         g_mpts[w].y = m->y + f[1]*(A) + sd[1]*(B) + n[1]*(C);         g_mpts[w].z = m->z + f[2]*(A) + sd[2]*(B) + n[2]*(C);         g_mpts[w].reveal = now; g_mpts[w].gain = (G); w++; } } while (0)
 
     /* body: a squat abdomen and a smaller head slung forward */
-    for (i = 0; i < 260; i++) {
+    for (i = 0; i < (m->type == T_LISTENER ? 70 : 260); i++) {
         float a = hash1((float)i * 1.7f + m->seed) * 6.2831853f;
         float b = hash1((float)i * 3.1f + m->seed + 4.0f) * 3.1415927f;
         float r = 0.26f * sc * (float)pow(hash1((float)i * 5.3f + m->seed), 0.34);
@@ -753,7 +769,9 @@ static void mon_emit_points(const Monster *m, float now)
         float ex = wx*f[0] + wy*f[1] + wz*f[2];
         float ey = wx*sd[0] + wy*sd[1] + wz*sd[2];
         float ez = wx*n[0] + wy*n[1] + wz*n[2];
-        float kx = ex * 0.42f, ky = ey * 0.46f, kz = 0.88f * sc;
+        float kx, ky, kz;
+        if (m->type == T_LISTENER) { kx = ex * 0.55f; ky = ey * 0.55f; kz = 0.30f * sc; }
+        else { kx = ex * 0.42f; ky = ey * 0.46f; kz = 0.88f * sc; }
 
         for (k = 0; k < 46; k++) {
             float u   = (float)k / 45.0f;
@@ -761,7 +779,8 @@ static void mon_emit_points(const Monster *m, float now)
             float a   = 2.0f * iu * u * kx + u * u * ex;
             float b2  = 2.0f * iu * u * ky + u * u * ey;
             float c2  = 2.0f * iu * u * kz + u * u * ez;
-            float rad = (0.175f * iu * iu + 0.028f) * sc;
+            float rad = (0.175f * iu * iu + 0.028f) * sc
+                      * (m->type == T_LISTENER ? 0.40f : 1.0f);
             int   q;
             for (q = 0; q < LEG_TUBE; q++) {
                 float h  = (float)(i * 97 + k * 13 + q) * 1.31f + m->seed;
@@ -2056,14 +2075,16 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
         glDrawArrays(GL_POINTS, 0, g_wcount);
     }
 
-    glUniform1f(u_monster, 1.0f);
     glUniform1f(u_persist, 0.0f);
     glBindVertexArray(g_mvao);
     for (i = 0; i < g_mon_count; i++) {
         if (!mon_visible(&g_mon[i])) continue;
         mon_emit_points(&g_mon[i], now);
+        /* 1, 2, 3: the shader gives each its own red */
+        glUniform1f(u_monster, 1.0f + (float)g_mon[i].type);
         glDrawArrays(GL_POINTS, 0, MON_POINTS);
     }
+    glUniform1f(u_monster, 0.0f);
 
     {   /* the readout */
         char left[40], right[40];

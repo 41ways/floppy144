@@ -25,7 +25,7 @@
 #define REV_C       12409
 #define AP_LEN       1051
 
-enum { V_PING, V_ROAR, V_HIT, V_BEEP, V_SPLASH, V_FLAT };
+enum { V_PING, V_ROAR, V_ROAR_HI, V_ROAR_LO, V_HIT, V_BEEP, V_SPLASH, V_FLAT, V_HUM };
 
 typedef struct {
     int   active;
@@ -94,9 +94,18 @@ static float voice_sample(Voice *v)
                 + (float)sin(6.2831853 * f * 1.004 * v->t)) * 0.5f;
         }
         s = s * att * 0.52f + frand() * (float)exp(-x * 22.0f) * 0.045f;
-    } else if (v->kind == V_ROAR) {
-        /* low, detuned, and it slides down as it commits to the charge */
-        float f   = 78.0f - 30.0f * x;
+    } else if (v->kind == V_HUM) {
+        /* sixty-cycle light fixtures, forever */
+        float env = (x < 0.10f ? x / 0.10f : (x > 0.9f ? (1.0f - x) / 0.1f : 1.0f));
+        s = ((float)sin(6.2831853 * 120.0 * v->t) * 0.5f
+           + (float)sin(6.2831853 * 240.0 * v->t) * 0.2f
+           + frand() * 0.06f) * env * 0.10f;
+    } else if (v->kind == V_ROAR || v->kind == V_ROAR_HI || v->kind == V_ROAR_LO) {
+        /* the same throat at three depths: the small one yelps, the big one
+         * drops the floor, the tall one keens */
+        float f0  = v->kind == V_ROAR_LO ? 52.0f
+                  : v->kind == V_ROAR_HI ? 164.0f : 96.0f;
+        float f   = f0 * (1.0f - 0.38f * x);
         float env = (x < 0.06f ? x / 0.06f : (float)exp(-(x - 0.06f) * 2.6f));
         float saw = (float)fmod(f * v->t, 1.0) * 2.0f - 1.0f;
         float sub = (float)sin(6.2831853 * (f * 0.5) * v->t);
@@ -238,7 +247,12 @@ void audio_shutdown(void)
 }
 
 void audio_ping(void) { voice_start(V_PING, 2.60f); }
-void audio_roar(void) { voice_start(V_ROAR, 1.70f); }
+void audio_roar(int type)
+{
+    voice_start(type == 1 ? V_ROAR_LO : (type == 2 ? V_ROAR_HI : V_ROAR),
+                type == 2 ? 2.30f : 1.70f);
+}
+void audio_hum(void)  { voice_start(V_HUM, 24.0f); }
 void audio_hit(void)  { voice_start(V_HIT,  0.55f); }
 void audio_beep(void) { voice_start(V_BEEP, 0.42f); }
 
