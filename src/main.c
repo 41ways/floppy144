@@ -278,7 +278,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     if (p_wglSwapIntervalEXT) p_wglSwapIntervalEXT(1);   /* vsync */
 
     audio_init();
-    game_init();
+    QueryPerformanceCounter(&start);
+    game_init((unsigned)(start.QuadPart ^ (start.QuadPart >> 32)));
 
     ShowWindow(hwnd, SW_SHOW);
     glViewport(0, 0, g_width, g_height);
@@ -320,8 +321,9 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
         if (title_timer > 0.25f) {
             char t[160];
             title_timer = 0.0f;
-            sprintf(t, "%s  -  %d points  -  depth %.1f m  -  hit %d  -  %s",
-                    APP_TITLE, game_point_count(), -game_depth(), game_hits(),
+            sprintf(t, "%s  -  lives %d  -  depth %.1f m  -  %d pts  -  %d hunting  -  %s",
+                    APP_TITLE, game_lives(), game_depth(),
+                    game_point_count(), game_monsters(),
                     g_captured ? "click to ping, Esc to release"
                                : "click the window to look around");
             SetWindowTextA(hwnd, t);
