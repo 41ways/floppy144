@@ -26,7 +26,7 @@
 #define AP_LEN       1051
 
 enum { V_PING, V_ROAR, V_ROAR_HI, V_ROAR_LO, V_HIT, V_BEEP, V_SPLASH, V_FLAT, V_HUM,
-       V_STROKE, V_DEFIB };
+       V_STROKE, V_DEFIB, V_STEP };
 
 typedef struct {
     int   active;
@@ -47,6 +47,7 @@ static float *g_ra, *g_rb, *g_rc, *g_ap;
  * simply leaves, and there is no other thing a person hears that as except
  * being under water. */
 static float g_lp_target = 1.0f, g_lp = 1.0f, g_lp_z;
+static float g_vol = 0.8f;
 static int    g_ia, g_ib, g_ic, g_iap;
 
 static float frand(void)
@@ -101,6 +102,11 @@ static float voice_sample(Voice *v)
         float sw  = (float)sin(3.1415927 * x);
         float res = (float)sin(6.2831853 * (150.0 + 90.0 * sw) * v->t);
         s = (frand() * 0.7f + res * 0.3f) * sw * sw * 0.34f;
+    } else if (v->kind == V_STEP) {
+        /* a shoe on vinyl: a soft knock and the tiniest squeak of it */
+        s = (frand() * (float)exp(-x * 26.0)
+           + (float)sin(6.2831853 * 95.0 * v->t) * (float)exp(-x * 18.0) * 0.5f
+           + (float)sin(6.2831853 * 1450.0 * v->t) * (float)exp(-x * 40.0) * 0.06f) * 0.30f;
     } else if (v->kind == V_DEFIB) {
         /* the whine of the charge, the thump of it landing, and two beats of
          * a heart deciding to continue */
@@ -122,7 +128,7 @@ static float voice_sample(Voice *v)
         float env = (x < 0.10f ? x / 0.10f : (x > 0.9f ? (1.0f - x) / 0.1f : 1.0f));
         s = ((float)sin(6.2831853 * 120.0 * v->t) * 0.5f
            + (float)sin(6.2831853 * 240.0 * v->t) * 0.2f
-           + frand() * 0.06f) * env * 0.10f;
+           + frand() * 0.06f) * env * 0.055f;
     } else if (v->kind == V_ROAR || v->kind == V_ROAR_HI || v->kind == V_ROAR_LO) {
         /* the same throat at three depths: the small one yelps, the big one
          * drops the floor, the tall one keens */
@@ -201,6 +207,7 @@ static void render(short *out, int n)
         g_lp += (g_lp_target - g_lp) * 0.0006f;      /* slide, never switch */
         g_lp_z += (mix - g_lp_z) * g_lp;
         mix = g_lp_z * (1.0f + (1.0f - g_lp) * 1.30f);
+        mix *= g_vol;
         if (mix >  1.0f) mix =  1.0f;
         if (mix < -1.0f) mix = -1.0f;
         out[i] = (short)(mix * 26000.0f);
@@ -278,6 +285,9 @@ void audio_roar(int type)
 void audio_hum(void)  { voice_start(V_HUM, 24.0f); }
 void audio_stroke(void) { voice_start(V_STROKE, 0.62f); }
 void audio_defib(void)  { voice_start(V_DEFIB, 2.60f); }
+void audio_step(void)   { voice_start(V_STEP, 0.16f); }
+void audio_set_volume(float v) { g_vol = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); }
+float audio_get_volume(void)   { return g_vol; }
 void audio_hit(void)  { voice_start(V_HIT,  0.55f); }
 void audio_beep(void) { voice_start(V_BEEP, 0.42f); }
 

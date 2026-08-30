@@ -337,6 +337,7 @@ static const char *CAVE_FS =
 "uniform float uRoom;     // the rock squaring into somewhere built\n"
 "uniform float uRoad;     // past the door: no walls end it\n"
 "uniform float uWhite;    // and the world goes to white\n"
+"uniform float uPulse;    // the beat you feel as the door nears\n"
 "\n"
 "uniform vec3  uBrA[16];\n"
 "uniform vec3  uBrB[16];\n"
@@ -379,6 +380,27 @@ static const char *CAVE_FS =
 "  vec2 mp = mod(p.xz + 3.5, 7.0) - 3.5;\n"
 "  float pil = max(abs(mp.x), abs(mp.y)) - 0.42;\n"
 "  float boxm = min(slab, pil);\n"
+/* the maze: a wall every seventh metre with one doorway, stubs off the
+   pillars - rooms that stop, and one way that always leads on */
+"  {\n"
+"    float rz = mod(p.z + 3.5, 7.0) - 3.5;\n"
+"    float ri = floor((-p.z + 3.5) / 7.0);\n"
+"    vec2  rc = centre(ri * -7.0 + 3.5);\n"
+"    float gx = rc.x + (h1(ri * 7.77 + uSeed * 2.0) - 0.5) * 16.0;\n"
+"    float wd = abs(rz) - 0.20;\n"
+"    if (abs(p.x - gx) > 1.60 && wd < boxm) boxm = wd;\n"
+"    float ci = floor((p.x + 3.5) / 7.0) * 57.0 + ri;\n"
+"    float hs = h1(ci * 3.17 + uSeed);\n"
+"    if (hs < 0.18) { if (mp.y > 0.40 && mp.y < 3.12) {\n"
+"      float w2 = abs(mp.x) - 0.17; if (w2 < boxm) boxm = w2; } }\n"
+"    else if (hs < 0.36) { if (mp.x > 0.40 && mp.x < 3.12) {\n"
+"      float w2 = abs(mp.y) - 0.17; if (w2 < boxm) boxm = w2; } }\n"
+"    {\n"
+"      float open2 = min(1.60 - abs(p.x - gx), 1.60 - abs(rz));\n"
+"      open2 = min(open2, slab);\n"
+"      boxm = max(boxm, open2);\n"
+"    }\n"
+"  }\n"
 "  m = mix(m, boxm, uRoom);\n"
 "  if (uRoad < 0.5) m = min(m, p.z + 525.0);\n"
 "  int i0 = int(clamp(-p.z/34.0, 0.0, 14.0));\n"
@@ -447,7 +469,10 @@ static const char *CAVE_FS =
 "  vec2 lc = centre(uCam.z - 20.0);\n"
 "  vec3 lp = vec3(lc.x, lc.y + 0.6, max(uCam.z - 20.0, -521.5));\n"
 "  vec3 ld = normalize(lp - p);\n"
-"  float dif = max(dot(n, ld), 0.0);\n"
+/* Wrapped diffuse: rock in a cave is lit by everything the light has
+   already touched, so the terminator softens instead of cutting to
+   black - the moon look was a hard max(dot,0) with no fill at all. */
+"  float dif = clamp((dot(n, ld) + 0.38) / 1.38, 0.0, 1.0);\n"
 "  float sh  = shade_to(p, ld);\n"
 "  float ao  = occl(p, n);\n"
 "  float fre = pow(1.0 - max(dot(n, -rd), 0.0), 3.0);\n"
@@ -455,8 +480,12 @@ static const char *CAVE_FS =
 "  vec3 warm = mix(vec3(1.00, 0.93, 0.82), vec3(1.00, 0.96, 0.84), uRoom);\n"
 /* No ambient floor: a surface no light reaches stays black, or the
    sounding would stop being the way you see. The corridor doubles it. */
-"  vec3 col  = alb * uLight * (0.19 + 0.42*uRoom) * ao;\n"
-"  col += alb * warm * dif * sh * (0.18 + 0.62*uLight);\n"
+"  float sky = clamp(n.y * 0.5 + 0.5, 0.0, 1.0);\n"
+"  vec3 hemi = mix(warm * 0.55, vec3(0.85, 0.90, 1.0), sky);\n"
+"  vec3 col  = alb * hemi * uLight * (0.16 + 0.40*uRoom) * ao;\n"
+/* and a floor bounce, so ceilings are not painted-on black */
+"  col += alb * warm * clamp(-n.y, 0.0, 1.0) * uLight * 0.10;\n"
+"  col += alb * warm * dif * mix(sh, 1.0, 0.22) * (0.18 + 0.55*uLight);\n"
 "  col += warm * fre * (0.02 + 0.14*uLight) * ao;\n"
 "  col += warm * pow(max(dot(reflect(-ld, n), -rd), 0.0), 34.0) * uWet * 0.65 * sh;\n"
 "\n"
@@ -486,6 +515,7 @@ static const char *CAVE_FS =
 "  col = mix(vec3(0.010,0.012,0.018) + warm*0.045*uLight, col, fog);\n"
 "  col = col / (col + vec3(0.9));\n"
 "  col = pow(max(col, vec3(0.0)), vec3(0.4545));\n"
+"  col += vec3(1.0, 0.98, 0.95) * uPulse * 0.10 * uRoom;\n"
 "  col = mix(col, vec3(1.0), uWhite);\n"
 "  FragColor = vec4(col, 1.0); }\n";
 

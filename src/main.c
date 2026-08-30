@@ -35,6 +35,8 @@ static int g_width    = WIN_W;
 static int g_height   = WIN_H;
 static int g_captured = 0;     /* mouse locked to the window centre */
 static int g_ping     = 0;     /* a click arrived since the last frame */
+static int g_menu     = 0;
+static int g_enter    = 0;
 
 static int g_headless;    /* -shot: no dialogs, or the script waits forever */
 
@@ -66,9 +68,11 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     case WM_KEYDOWN:
         if (wp == VK_ESCAPE) {
-            if (g_captured) set_capture(hwnd, 0);
+            /* Esc belongs to the pause menu now; only an uncaptured Esc quits */
+            if (g_captured) g_menu = 1;
             else g_running = 0;
         }
+        if (wp == VK_RETURN) g_enter = 1;
         return 0;
     case WM_LBUTTONDOWN:
         /* The click that grabs the mouse counts as a ping too. Otherwise the
@@ -445,7 +449,11 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
         in.left  = g_captured && (GetAsyncKeyState('A') & 0x8000) ? 1 : 0;
         in.right = g_captured && (GetAsyncKeyState('D') & 0x8000) ? 1 : 0;
         in.ping  = g_ping;
+        in.menu  = g_menu;
+        in.enter = g_enter;
         g_ping   = 0;
+        g_menu   = 0;
+        g_enter  = 0;
         read_mouse(hwnd, &in.mdx, &in.mdy);
 
         if (shot_path[0] && shot_spider >= 0 && frame == 30)
@@ -465,6 +473,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 
         game_frame(&in, dt, now, g_width, g_height);
         audio_update();
+        if (game_quit()) g_running = 0;
 
         if (shot_path[0]) {
             /* a capture that cannot report the state it captured is half a

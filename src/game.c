@@ -105,13 +105,13 @@ static GLint  w_res, w_time, w_open, w_bright, w_sharp, w_lamp, w_lampb;
 static GLuint g_cave_prog;
 static GLint  c_res, c_cam, c_fwd, c_right, c_up, c_seed, c_wander,
               c_rough, c_time, c_light, c_wet, c_room, c_road, c_white,
-              c_bra, c_brb;
+              c_pulse, c_bra, c_brb;
 static GLint  u_fade, u_grey;
 static Point *g_mpts;          /* heap: 48 KB of it has no business in the exe */
 
 /* --- state -------------------------------------------------------------- */
 
-enum { ST_TITLE, ST_PLAY, ST_SURFACE, ST_WAKE, ST_FLATLINE, ST_ROAD };
+enum { ST_TITLE, ST_PLAY, ST_SURFACE, ST_WAKE, ST_FLATLINE, ST_ROAD, ST_MENU_ };
 static int g_state;
 
 extern int plat_text_points(const char *str, int px, float *out_xy, int max);
@@ -137,6 +137,13 @@ static int   g_ev;                /* 0 calm, 1 horde closing, 2 aftermath */
 static float g_ev_t;
 static float g_guide_next;        /* the heartbeat that knows the way */
 static float g_road;
+static int   g_quit;
+static int   g_menu_open, g_menu_sel, g_menu_mode;
+static int   g_menu_prev;         /* the state the menu will hand back */
+static const char *g_note;        /* one line, from the other side */
+static float g_note_t;
+static float g_step_acc;          /* metres since the last footfall */
+static float g_pulse;             /* the beat you feel as the door nears */
 static float g_dive;              /* the plunge at gate one */
 static int   g_pings;
 static float g_clarity;           /* how much of it resolves this time */
@@ -342,6 +349,15 @@ static float gate_bulge(float z)
     }
 }
 
+/* where the doorway sits in row ri of the hall maze */
+static float tunnel_gapx(float ri)
+{
+    float cx, cy;
+    tunnel_centre(ri * -7.0f + 3.5f, &cx, &cy);
+    return cx + (hash1(ri * 7.77f + g_seed * 2.0f) - 0.5f) * 16.0f;
+}
+
+
 static float cave_sdf(float x, float y, float z)
 {
     float cx, cy, dx, dy, r, rad;
@@ -356,6 +372,12 @@ static float cave_sdf(float x, float y, float z)
     {   /* whichever is more open here, the main passage or a branch */
         float main_air = rad - r;
         if (-z > GATE_2 + 4.0f) {
+            /* The hall would not be the hall if you could walk it straight.
+             * Every seven metres a wall crosses it with one doorway in it,
+             * and stubs jut from the pillars, so the place is full of rooms
+             * that stop - but every wall has its gap, so one way always
+             * leads on. The doorways come from the row hash: the maze is the
+             * seed, like everything else. */
             /* The hall. A ceiling you could touch, pillars on a seven-metre
              * grid, no walls to speak of - the same room over and over in
              * every direction, which is the whole architecture of the place
@@ -366,6 +388,51 @@ static float cave_sdf(float x, float y, float z)
             float ax = (float)fabs(mx), az = (float)fabs(mz);
             float pil = (ax > az ? ax : az) - 0.42f;
             float hall = slab < pil ? slab : pil;
+            {   /* row walls, one gap apiece */
+                float rz = (float)fmod(fmod(z, 7.0f) + 10.5f, 7.0f) - 3.5f;
+                float ri = (float)floor((-z + 3.5f) / 7.0f);
+                float gx = tunnel_gapx(ri);
+                float wd = (float)fabs(rz) - 0.20f;
+                if ((float)fabs(x - gx) > 1.60f && wd < hall) hall = wd;
+            }
+            {   /* stubs off the pillars, one direction per cell */
+                float ci = (float)floor((x + 3.5f) / 7.0f) * 57.0f
+                         + (float)floor((-z + 3.5f) / 7.0f);
+                float hsel = hash1(ci * 3.17f + g_seed);
+                if (hsel < 0.36f) {
+                    float sd2;
+                    if (hsel < 0.18f)
+                        sd2 = ((float)fabs(mx) - 0.17f) > (0.45f - (mz < 2.9f ? 0.0f : 1000.0f))
+                            ? (float)fabs(mx) - 0.17f : 1000.0f;
+                    else
+                        sd2 = 1000.0f;
+                    if (hsel < 0.18f) {
+                        /* a sealed lane: the wall runs pillar to pillar */
+                        if (mz > 0.40f && mz < 3.12f) {
+                            float w2 = (float)fabs(mx) - 0.17f;
+                            if (w2 < hall) hall = w2;
+                        }
+                    } else {
+                        if (mx > 0.40f && mx < 3.12f) {
+                            float w2 = (float)fabs(mz) - 0.17f;
+                            if (w2 < hall) hall = w2;
+                        }
+                    }
+                    (void)sd2;
+                }
+            }
+            {   /* The doorway wins. A gap that happened to land on a pillar
+                 * or a stub sealed its whole row - and one sealed row seals
+                 * the rest of the game. Carve it through everything. */
+                float rz = (float)fmod(fmod(z, 7.0f) + 10.5f, 7.0f) - 3.5f;
+                float ri = (float)floor((-z + 3.5f) / 7.0f);
+                float gx = tunnel_gapx(ri);
+                float ox2 = 1.60f - (float)fabs(x - gx);
+                float oz2 = 1.60f - (float)fabs(rz);
+                float open2 = ox2 < oz2 ? ox2 : oz2;
+                if (open2 > slab) open2 = slab;
+                if (open2 > hall) hall = open2;
+            }
             float k2 = ((-z) - (GATE_2 + 4.0f)) / 6.0f;
             if (k2 > 1.0f) k2 = 1.0f;
             main_air = main_air * (1.0f - k2) + hall * k2;
@@ -1632,6 +1699,7 @@ void game_init(unsigned seed, float start_depth)
     c_room   = glGetUniformLocation(g_cave_prog, "uRoom");
     c_road   = glGetUniformLocation(g_cave_prog, "uRoad");
     c_white  = glGetUniformLocation(g_cave_prog, "uWhite");
+    c_pulse  = glGetUniformLocation(g_cave_prog, "uPulse");
     c_bra    = glGetUniformLocation(g_cave_prog, "uBrA");
     c_brb    = glGetUniformLocation(g_cave_prog, "uBrB");
 
@@ -1890,6 +1958,81 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
         return;
     }
 
+    if (in->menu && (g_state == ST_PLAY || g_state == ST_MENU_)) { }
+    if (in->menu) {
+        if (g_state == ST_PLAY) {
+            g_menu_prev = g_state; g_state = ST_MENU_;
+            g_menu_open = 1; g_menu_sel = 0; g_menu_mode = 0;
+        } else if (g_state == ST_MENU_) {
+            if (g_menu_mode == 1) g_menu_mode = 0;
+            else g_state = g_menu_prev;
+        }
+    }
+
+    if (g_state == ST_MENU_) {
+        /* The pause screen is the same instrument as everything else: dark,
+         * and a few lines of the machine's own lettering. */
+        static int hold;
+        char v[40];
+        int i2;
+        if (in->fwd  && !hold) { g_menu_sel = (g_menu_sel + 2) % 3; hold = 1; }
+        else if (in->back && !hold) { g_menu_sel = (g_menu_sel + 1) % 3; hold = 1; }
+        else if (!in->fwd && !in->back) hold = 0;
+
+        if (g_menu_mode == 1) {
+            if (in->left)  audio_set_volume(audio_get_volume() - dt * 0.6f);
+            if (in->right) audio_set_volume(audio_get_volume() + dt * 0.6f);
+            if (in->enter || in->ping) g_menu_mode = 0;
+        } else if (in->enter || in->ping) {
+            if (g_menu_sel == 0) g_state = g_menu_prev;
+            else if (g_menu_sel == 1) g_menu_mode = 1;
+            else g_quit = 1;
+        }
+
+        glClearColor(0.008f, 0.010f, 0.014f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        g_hud_n = 0;
+        g_hud_cache[0] = 0;
+        hud_line(g_menu_sel == 0 ? "> CONTINUE" : "CONTINUE", 0.13f, 0.0f, 0.30f,
+                 g_menu_sel == 0 ? 0.95f : 0.45f);
+        if (g_menu_mode == 1) {
+            int bars = (int)(audio_get_volume() * 10.0f + 0.5f);
+            v[0] = 0;
+            for (i2 = 0; i2 < 10; i2++) v[i2] = (i2 < bars) ? '#' : '-';
+            v[10] = 0;
+            {   char lbl[64];
+                sprintf(lbl, "VOLUME  %s", v);
+                hud_line(lbl, 0.11f, 0.0f, 0.02f, 0.95f);
+            }
+            hud_line("A / D TO ADJUST", 0.07f, 0.0f, -0.20f, 0.5f);
+        } else {
+            hud_line(g_menu_sel == 1 ? "> SETTING" : "SETTING", 0.13f, 0.0f, 0.02f,
+                     g_menu_sel == 1 ? 0.95f : 0.45f);
+        }
+        hud_line(g_menu_sel == 2 ? "> EXIT" : "EXIT", 0.13f, 0.0f, -0.44f,
+                 g_menu_sel == 2 ? 0.95f : 0.45f);
+        if (g_hud_n > 0) {
+            glBindBuffer(GL_ARRAY_BUFFER, g_hvbo);
+            glBufferSubData(GL_ARRAY_BUFFER, 0,
+                            (GLsizeiptr)(g_hud_n * (int)sizeof(Point)), g_hud);
+            glUseProgram(g_prog);
+            glUniform1f(u_time, now);
+            glUniform1f(u_monster, 0.0f);
+            glUniform1f(u_persist, 1.0f);
+            glUniform1f(u_fade, 1.0f);
+            glUniform1f(u_grey, 0.0f);
+            glUniform1f(u_flat, 1.0f);
+            glUniform1f(u_ink, 0.0f);
+            glUniform1f(u_base, 0.9f);
+            glBindVertexArray(g_hvao);
+            glDrawArrays(GL_POINTS, 0, g_hud_n);
+            glUniform1f(u_base, 0.0f);
+            glUniform1f(u_flat, 0.0f);
+        }
+        return;
+    }
+
     if (g_state == ST_ROAD) {
         /* Through the door there is no room - there is distance. You are
          * carried down it, the hall repeating past you, and the world takes
@@ -2102,9 +2245,16 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
     } else if (len > 0.0001f) {
         float s = MOVE_SPEED * dt / len;
         {   float ox = g_px, oy = g_py, oz = g_pz;
+            float moved;
             try_move(mx * s, my * s, mz * s);
-            g_travelled += (float)sqrt((g_px-ox)*(g_px-ox) + (g_py-oy)*(g_py-oy)
-                                     + (g_pz-oz)*(g_pz-oz));
+            moved = (float)sqrt((g_px-ox)*(g_px-ox) + (g_py-oy)*(g_py-oy)
+                              + (g_pz-oz)*(g_pz-oz));
+            g_travelled += moved;
+            /* in the hall your feet make the sound hospital floors make */
+            if (g_shockf > 0.3f) {
+                g_step_acc += moved;
+                if (g_step_acc > 1.05f) { g_step_acc = 0.0f; audio_step(); }
+            }
         }
         g_has_moved = 1;
     }
@@ -2149,6 +2299,8 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
                 g_dive = 1.0f;
                 g_vx = 0.0f; g_vy = -6.5f; g_vz = -2.0f;
                 g_flash = 0.35f;
+                g_note = "\xEC\x82\xB0\xEC\x86\x8C\xED\x8F\xAC\xED\x99\x94\xEB\x8F\x84\xEA\xB0\x80 \xEB\x96\xA8\xEC\x96\xB4\xEC\xA0\xB8\xEC\x9A\x94";
+                g_note_t = 3.4f;
             } else {
                 /* Gates two and three are ambushes. You come up out of the
                  * water (or round the bend), sound the room, and it is full
@@ -2189,6 +2341,8 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
     if (g_stage_flash > 0.0f) g_stage_flash -= dt * 0.55f;
     g_stagef += ((float)g_stage - g_stagef) * (1.0f - (float)exp(-dt * 1.6f));
     if (g_dive > 0.0f) g_dive -= dt * 0.8f;
+    if (g_note_t > 0.0f) g_note_t -= dt;
+    g_pulse -= dt * 1.7f; if (g_pulse < 0.0f) g_pulse = 0.0f;
 
     /* the ambush, and the shock that answers it */
     if (g_ev == 1) {
@@ -2217,7 +2371,12 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
         float ddx = g_px, ddz = g_pz + WAKE_Z;
         float dd  = (float)sqrt(ddx * ddx + ddz * ddz);
         emit_guide(now);
+        g_pulse = 1.0f;
         g_guide_next = now + 1.2f + dd * 0.045f;
+        if (dd < 26.0f && g_note_t <= 0.0f) {
+            g_note = "\xEB\x93\xA4\xEB\xA0\xA4? \xEC\x9D\xB4\xEC\xAA\xBD\xEC\x9D\xB4\xEC\x95\xBC";
+            g_note_t = 2.6f;
+        }
     }
 
     /* the door at the end of the hall: an endless road behind it */
@@ -2316,6 +2475,7 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
             }
             glUniform3fv(c_bra, 16, bra);
             glUniform3fv(c_brb, 16, brb);
+            glUniform1f(c_pulse, g_pulse);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
             glBindVertexArray(g_wvao_full);
             glDrawArrays(GL_TRIANGLES, 0, 3);
@@ -2382,7 +2542,8 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
 
     {   /* the readout */
         char left[40], right[40];
-        const char *hint = (g_ev == 2)
+        const char *hint = (g_note_t > 0.0f) ? g_note
+                         : (g_ev == 2)
                          ? (g_shock >= 2 ? "\xEB\x8F\x8C\xEC\x95\x84\xEC\x99\x80, \xEC\xa1\xb0\xea\xb8\x88\xeb\xa7\x8c \xeb\x8d\x94"
                                          : "\xEC\xA0\x95\xEC\x8B\xA0 \xEC\xB0\xA8\xEB\xA0\xA4")
                          : ((-g_pz >= WAKE_Z - 7.0f) ? "CLICK TO OPEN"
@@ -2431,6 +2592,7 @@ float game_depth(void)       { return -g_pz; }
 int   game_lives(void)       { return g_lives; }
 int   game_monsters(void)    { return g_mon_count; }
 int   game_stage(void)       { return g_stage; }
+int   game_quit(void)        { return g_quit; }
 int   game_state(void)       { return g_state; }
 float game_px(void)          { return g_px; }
 float game_py(void)          { return g_py; }
