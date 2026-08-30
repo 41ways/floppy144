@@ -30,26 +30,36 @@ against them costs zero distribution bytes. Everything else follows from that:
 
 Current budget: roughly 145 KB projected, leaving about 90% of the disk free.
 
+## Playing the latest build
+
+CI overwrites a rolling `latest` release on every push to main, so there is one
+fixed URL that needs no GitHub account:
+
+    https://github.com/41ways/floppy144/releases/download/latest/SOUNDING.exe
+
+`./update.sh` fetches it into `~/play`. Windows SmartScreen will warn about an
+unsigned binary; the exe is 80 KB of the source in this repo.
+
+Click the window once to capture the mouse. WASD moves in silence, click sends
+a ping, Esc releases the mouse and a second Esc quits.
+
 ## Build
 
-There is no C compiler on the primary dev machine — CI does the building. Push,
-and GitHub Actions cross-compiles with mingw-w64, checks the size, and uploads
-`dist/` as an artifact. The size report also appears in the run summary, so the
-result is legible from a phone.
+Pushing is enough: GitHub Actions cross-compiles with mingw-w64, gates the size
+and publishes the result. The size report lands in the run summary, so it reads
+fine from a phone.
 
-To build locally you need mingw-w64:
-
-```bash
-make        # release build into dist/
-make size   # build, then report against the 1,474,560 byte budget
-make clean
-```
-
-Under MSYS2 the cross prefix is unnecessary:
+For tuning you want the local loop instead, because it is two seconds rather
+than a minute. With a native mingw-w64 (WinLibs, MSYS2) on PATH:
 
 ```bash
-make CC=gcc
+mingw32-make CC=gcc          # release build into dist/
+mingw32-make CC=gcc size     # build, then report against the byte budget
 ```
+
+On Linux or macOS with the cross toolchain installed, plain `make` picks up
+`x86_64-w64-mingw32-gcc` on its own. CI stays the source of truth for the size
+number, since that is the compiler the submitted binary comes from.
 
 ## Layout
 

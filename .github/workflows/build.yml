@@ -5,6 +5,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: write        # needed to move the rolling "latest" release
+
 jobs:
   windows-x64:
     runs-on: ubuntu-latest
@@ -33,3 +36,23 @@ jobs:
           name: SOUNDING-win64
           path: dist/
           if-no-files-found: error
+
+      # Artifacts need a GitHub login to download, which is friction when the
+      # machine that builds and the machine that plays are different. A rolling
+      # release gives one fixed URL that works with no account at all:
+      #   https://github.com/41ways/floppy144/releases/download/latest/SOUNDING.exe
+      - name: Publish rolling latest
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SIZE=$(stat -c%s dist/SOUNDING.exe)
+          gh release delete latest --yes --cleanup-tag 2>/dev/null || true
+          gh release create latest dist/SOUNDING.exe \
+            --title "latest" \
+            --prerelease \
+            --notes "Rolling build of \`${GITHUB_SHA::7}\` — ${SIZE} bytes of 1,474,560.
+
+          Download \`SOUNDING.exe\` below and run it. Click the window once to
+          capture the mouse. WASD moves in silence, click sends a ping, Esc
+          releases the mouse and a second Esc quits."
