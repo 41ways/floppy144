@@ -295,7 +295,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     UINT   fmt_count = 0;
     float  title_timer = 0.0f;
     /* -shot <file> <frame> [pingframe]: run a scripted session, save, quit */
-    char   shot_path[260]; int shot_at = 0, shot_ping = 3, frame = 0;
+    char   shot_path[260]; int shot_at = 0, shot_ping = 3, frame = 0, shot_spider = -1;
     shot_path[0] = 0;
 
     const int pf_attribs[] = {
@@ -320,7 +320,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 
     if (cmd && strstr(cmd, "-shot")) {
         char *p = strstr(cmd, "-shot") + 5;
-        sscanf(p, "%259s %d %d", shot_path, &shot_at, &shot_ping);
+        sscanf(p, "%259s %d %d %d", shot_path, &shot_at, &shot_ping, &shot_spider);
         if (shot_at <= 0) shot_at = 70;
     }
 
@@ -419,6 +419,9 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
         in.ping  = g_ping;
         g_ping   = 0;
         read_mouse(hwnd, &in.mdx, &in.mdy);
+
+        if (shot_path[0] && shot_spider >= 0 && frame == 30)
+            game_debug_spider(now, shot_spider);
 
         if (shot_path[0]) {          /* scripted: sound repeatedly, then look */
             in.fwd   = (frame > 40);      /* walk, the way it is played */

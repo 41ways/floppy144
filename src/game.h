@@ -18,5 +18,6 @@ int   game_point_count(void);
 float game_depth(void);
 int   game_lives(void);
 int   game_monsters(void);
+void  game_debug_spider(float now, int type);
 
 #endif /* GAME_H */
