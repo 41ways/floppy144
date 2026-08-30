@@ -23,10 +23,12 @@
 
 #define MAX_POINTS   1200000   /* 19 MB of RAM, 0 bytes on disk */
 #define PING_RAYS       6000
-#define PING_BOUNCES       3   /* how many walls a wave survives */
-#define WAVE_POINTS   240000   /* the front in mid-air: shown, never kept */
-#define WAVE_EVERY         3   /* only every Nth ray draws its flight path */
-#define WAVE_STEP      0.75f   /* metres between samples along a ray */
+#define PING_BOUNCES       4   /* how many walls a wave survives */
+#define GRAZE_MIN      0.15f   /* below this the hit is a graze, not a bounce */
+#define MIN_SEGMENT    0.40f   /* a bounce that goes nowhere is a graze too */
+#define WAVE_POINTS    60000   /* the front in mid-air: shown, never kept */
+#define WAVE_EVERY        47   /* only every Nth ray is drawn in flight */
+#define WAVE_STEP      0.22f   /* dense enough that a tracer reads as a dash */
 #define RAY_STEPS         96
 #define WAVE_SPEED     11.0f   /* metres per second the wavefront travels */
 #define MOVE_SPEED      2.7f
@@ -397,9 +399,14 @@ static void emit_ping(float now, const float *f, const float *r, const float *u)
             if (g_count >= MAX_POINTS) break;
             if (!cave_ray(ox, oy, oz, dx, dy, dz, reach - travelled, &t)) break;
 
-            /* Trace the segment it just crossed. These are the only points
-             * that show the wave actually moving through the air, and they
-             * are drawn with uPersist = 0 so they vanish behind the front. */
+            /* Trace the segment it just crossed.
+             *
+             * Only a hundred-odd rays get drawn in flight, and that sparseness
+             * is the point. Six thousand at once average into an expanding
+             * wash where no single ricochet is visible; a hundred read as
+             * separate tracers you can watch travel, strike and kick off.
+             * The dense part of the ping is the map it leaves on the walls,
+             * not the part you watch move. */
             if ((i % WAVE_EVERY) == 0) {
                 float march;
                 for (march = WAVE_STEP; march < t; march += WAVE_STEP) {
@@ -408,7 +415,7 @@ static void emit_ping(float now, const float *f, const float *r, const float *u)
                     g_wpts[g_wcount].y = oy + dy * march;
                     g_wpts[g_wcount].z = oz + dz * march;
                     g_wpts[g_wcount].reveal = now + (travelled + march) / WAVE_SPEED;
-                    g_wpts[g_wcount].gain = gain * 0.42f;
+                    g_wpts[g_wcount].gain = gain * 0.95f;
                     g_wcount++;
                 }
             }
@@ -427,12 +434,25 @@ static void emit_ping(float now, const float *f, const float *r, const float *u)
             if (travelled >= reach * 0.98f) break;
 
             cave_normal(ox, oy, oz, n);
-            dot = dx * n[0] + dy * n[1] + dz * n[2];
+            dot = dx * n[0] + dy * n[1] + dz * n[2];   /* negative going in */
+
+            /* A tunnel is long and the beam points down it, so most rays meet
+             * the wall at eighty-odd degrees. Reflecting those makes the wave
+             * skim the rock, hit again a hand's width later, and crawl along
+             * the surface - which is not what a ricochet looks like.
+             *
+             * So a graze is absorbed and only a squarer hit comes back off,
+             * the way a bullet does: down a corridor it just travels, into a
+             * wall it kicks. */
+            if (-dot < GRAZE_MIN) break;
+            if (b > 0 && t < MIN_SEGMENT) break;
+
             dx -= 2.0f * dot * n[0];
             dy -= 2.0f * dot * n[1];
             dz -= 2.0f * dot * n[2];
-            ox += n[0] * 0.05f; oy += n[1] * 0.05f; oz += n[2] * 0.05f;
-            gain *= 0.55f;                    /* each bounce costs it energy */
+            /* step well clear, or the eroded wall catches it again at once */
+            ox += n[0] * 0.14f; oy += n[1] * 0.14f; oz += n[2] * 0.14f;
+            gain *= 0.62f;                    /* each kick costs it energy */
         }
     }
 
