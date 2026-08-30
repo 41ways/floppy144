@@ -25,7 +25,7 @@
 #define REV_C       12409
 #define AP_LEN       1051
 
-enum { V_PING, V_ROAR, V_HIT, V_BEEP };
+enum { V_PING, V_ROAR, V_HIT, V_BEEP, V_SPLASH };
 
 typedef struct {
     int   active;
@@ -42,6 +42,10 @@ static unsigned g_rng = 0x1234567u;
 static int      g_ready;
 
 static float *g_ra, *g_rb, *g_rc, *g_ap;
+/* One pole is all it takes. Drop the coefficient and the top of the spectrum
+ * simply leaves, and there is no other thing a person hears that as except
+ * being under water. */
+static float g_lp_target = 1.0f, g_lp = 1.0f, g_lp_z;
 static int    g_ia, g_ib, g_ic, g_iap;
 
 static float frand(void)
@@ -97,6 +101,12 @@ static float voice_sample(Voice *v)
         float saw = (float)fmod(f * v->t, 1.0) * 2.0f - 1.0f;
         float sub = (float)sin(6.2831853 * (f * 0.5) * v->t);
         s = (saw * 0.34f + sub * 0.30f + frand() * 0.16f) * env * 0.55f;
+    } else if (v->kind == V_SPLASH) {
+        /* going under: a slap, then everything closing over the top of it */
+        float env  = (float)exp(-x * 5.0);
+        float band = frand() * (float)exp(-x * 14.0);
+        float glug = (float)sin(6.2831853 * (240.0 - 180.0 * x) * v->t);
+        s = (band * 0.55f + glug * 0.34f) * env * 0.75f;
     } else if (v->kind == V_BEEP) {
         /* the flat blip of a bedside monitor, heard from under */
         float env = (x < 0.05f ? x / 0.05f : (float)exp(-(x - 0.05f) * 7.0f));
@@ -141,6 +151,10 @@ static void render(short *out, int n)
         if (++g_iap >= AP_LEN) g_iap = 0;
 
         mix = dry * 0.78f + apout * 0.80f;
+
+        g_lp += (g_lp_target - g_lp) * 0.0006f;      /* slide, never switch */
+        g_lp_z += (mix - g_lp_z) * g_lp;
+        mix = g_lp_z * (1.0f + (1.0f - g_lp) * 1.30f);
         if (mix >  1.0f) mix =  1.0f;
         if (mix < -1.0f) mix = -1.0f;
         out[i] = (short)(mix * 26000.0f);
@@ -213,3 +227,13 @@ void audio_ping(void) { voice_start(V_PING, 2.60f); }
 void audio_roar(void) { voice_start(V_ROAR, 1.70f); }
 void audio_hit(void)  { voice_start(V_HIT,  0.55f); }
 void audio_beep(void) { voice_start(V_BEEP, 0.42f); }
+
+void audio_submerged(int under)
+{
+    g_lp_target = under ? 0.055f : 1.0f;
+}
+
+void audio_splash(void)
+{
+    voice_start(V_SPLASH, 1.10f);
+}

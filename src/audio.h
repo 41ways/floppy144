@@ -12,5 +12,7 @@ void audio_ping(void);     /* the chirp you send out */
 void audio_roar(void);     /* it heard you */
 void audio_hit(void);      /* it reached you */
 void audio_beep(void);     /* the monitor, from the other side */
+void audio_splash(void);   /* going under */
+void audio_submerged(int under);  /* everything above 500 Hz leaves */
 
 #endif /* AUDIO_H */

@@ -45,6 +45,13 @@
 #define PING_CHUNK       100   /* rays traced per frame, so nothing stalls */
 #define RAY_STEPS         56
 #define WAVE_SPEED     11.0f   /* metres per second the wavefront travels */
+/* Sound moves four times faster in water than in air - 1480 against 343 - and
+ * putting that in the constant is the cheapest way to make a ping feel like it
+ * is travelling through something else. */
+#define WAVE_SPEED_WET 26.0f
+#define SWIM_DRAG      0.945f  /* what a stroke leaves behind */
+#define SWIM_LIFT      0.42f   /* and how it drifts up if you do nothing */
+#define MOTES          900     /* things suspended in it, lit only in passing */
 #define MOVE_SPEED      4.3f
 #define MOUSE_SENS      0.0022f
 #define PING_COOLDOWN   0.45f
@@ -115,6 +122,13 @@ static float g_surf;              /* 0..1 through a glimpse of the room */
 static float g_clarity;           /* how much of it resolves this time */
 static int   g_has_moved;
 static float g_travelled;
+static int   g_wet;              /* stage two: the passage is flooded */
+static float g_vx, g_vy, g_vz;   /* swimming carries momentum */
+static Point *g_motes;
+static GLuint g_movao, g_movbo;
+#ifdef DEMO_ENDING
+static float g_demo;      /* seconds of cave before the ending takes over */
+#endif
 
 /* --- cave shape, rerolled every attempt --------------------------------- */
 
@@ -763,6 +777,18 @@ static void mon_emit_points(const Monster *m, float now)
  * dark, and that is the only limit. */
 #define CONE_HALF_ANGLE 1.50f      /* radians, about 86 degrees */
 
+/* Stage two is under water: the second gate is where it drains again. */
+static int depth_is_wet(float z)
+{
+    float d = -z;
+    return (d >= GATE_1 - 1.0f && d < GATE_2 - 1.0f);
+}
+
+static float wave_speed(void)
+{
+    return g_wet ? WAVE_SPEED_WET : WAVE_SPEED;
+}
+
 static float ping_reach(void)
 {
     return 26.0f - 11.0f * depth_k(g_pz);   /* rock swallows more, deeper */
@@ -788,7 +814,7 @@ static void mon_lit_by(const float *f, float reach, float now)
         /* rock in between swallows it */
         if (cave_ray(g_px, g_py, g_pz, dx / d, dy / d, dz / d, d, &wall)) continue;
 
-        m->wake = now + d / WAVE_SPEED;
+        m->wake = now + d / wave_speed();
         m->tx = g_px; m->ty = g_py; m->tz = g_pz;  /* it remembers where, not who */
     }
 }
@@ -888,7 +914,7 @@ static void ping_work(void)
                     g_wpts[g_wcount].x = ox + dx * march;
                     g_wpts[g_wcount].y = oy + dy * march;
                     g_wpts[g_wcount].z = oz + dz * march;
-                    g_wpts[g_wcount].reveal = g_ping_t0 + (travelled + march) / WAVE_SPEED;
+                    g_wpts[g_wcount].reveal = g_ping_t0 + (travelled + march) / wave_speed();
                     g_wpts[g_wcount].gain = gain * 1.00f;
                     g_wcount++;
                 }
@@ -921,7 +947,7 @@ static void ping_work(void)
                     g_pts[g_count].x = ox + t1[0]*a + t2[0]*c;
                     g_pts[g_count].y = oy + t1[1]*a + t2[1]*c;
                     g_pts[g_count].z = oz + t1[2]*a + t2[2]*c;
-                    g_pts[g_count].reveal = g_ping_t0 + travelled / WAVE_SPEED;
+                    g_pts[g_count].reveal = g_ping_t0 + travelled / wave_speed();
                     /* The mark keeps more of itself than the bullet does: a
                      * tired ricochet still proves a wall is there, and the
                      * cave only takes shape if late hits stay readable. */
@@ -1203,6 +1229,34 @@ static void hud_build(const char *left, const char *right, const char *hint)
     }
 }
 
+/* Water is not empty, and that is most of what separates it from air. A few
+ * hundred specks drift in it and light up only as the front goes past, so the
+ * space between the walls stops being nothing. */
+static void motes_refresh(float now)
+{
+    int i;
+    float sp = wave_speed();
+    for (i = 0; i < MOTES; i++) {
+        float a = hash1((float)i * 1.7f) * 6.2831853f;
+        float r = 0.4f + hash1((float)i * 3.1f) * 2.0f;
+        float zz = g_pz + 1.5f - hash1((float)i * 5.3f) * 24.0f;
+        float cx, cy, d;
+        tunnel_centre(zz, &cx, &cy);
+        g_motes[i].x = cx + (float)cos(a + now * 0.11f) * r;
+        g_motes[i].y = cy + (float)sin(a * 1.7f) * r * 0.8f
+                     + (float)sin(now * 0.23f + (float)i) * 0.25f;
+        g_motes[i].z = zz;
+        d = (float)sqrt((g_motes[i].x - g_px) * (g_motes[i].x - g_px)
+                      + (g_motes[i].y - g_py) * (g_motes[i].y - g_py)
+                      + (g_motes[i].z - g_pz) * (g_motes[i].z - g_pz));
+        g_motes[i].reveal = g_ping_t0 + d / sp;
+        g_motes[i].gain = 0.55f;
+    }
+    glBindBuffer(GL_ARRAY_BUFFER, g_movbo);
+    glBufferSubData(GL_ARRAY_BUFFER, 0,
+                    (GLsizeiptr)(MOTES * (int)sizeof(Point)), g_motes);
+}
+
 /* --- the room -----------------------------------------------------------
  * What surfaces between stages. Not a place you stand in - a flat smear of
  * what eyes half-open would take in: strip lights overhead, a window, a rail,
@@ -1330,6 +1384,7 @@ void game_init(unsigned seed, float start_depth)
     g_hud     = (Point *)malloc((size_t)HUD_MAX * sizeof(Point));
     g_mpts    = (Point *)malloc((size_t)MON_POINTS * sizeof(Point));
     g_room    = (Point *)malloc((size_t)ROOM_MAX * sizeof(Point));
+    g_motes   = (Point *)malloc((size_t)MOTES * sizeof(Point));
     g_flash = 0.0f;
 
     g_prog    = gfx_build_program(POINT_VS, POINT_FS);
@@ -1373,6 +1428,13 @@ void game_init(unsigned seed, float start_depth)
     glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)HUD_MAX * (GLsizeiptr)sizeof(Point),
                  0, GL_DYNAMIC_DRAW);
     setup_attribs(g_hvao, g_hvbo);
+
+    glGenVertexArrays(1, &g_movao);
+    glGenBuffers(1, &g_movbo);
+    glBindBuffer(GL_ARRAY_BUFFER, g_movbo);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)MOTES * (GLsizeiptr)sizeof(Point),
+                 0, GL_DYNAMIC_DRAW);
+    setup_attribs(g_movao, g_movbo);
 
     glGenVertexArrays(1, &g_rvao);
     glGenBuffers(1, &g_rvbo);
@@ -1585,6 +1647,9 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
             basis(g_yaw, g_pitch, f, r, u);
             ping_begin(now, f, r, u);
             g_ping_ready = now + PING_COOLDOWN;
+#ifdef DEMO_ENDING
+            g_demo = 1.9f;     /* long enough to watch one ping land */
+#endif
             return;
         }
         glClearColor(0.008f, 0.012f, 0.020f, 1.0f);
@@ -1629,7 +1694,24 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
     if (in->left)  { mx -= r[0]; my -= r[1]; mz -= r[2]; }
 
     len = (float)sqrt(mx * mx + my * my + mz * mz);
-    if (len > 0.0001f) {
+
+    if (g_wet) {
+        /* Under water nothing starts or stops when you tell it to. A stroke
+         * adds to what you already had, drag takes most of it back, and left
+         * alone you drift upward - which is also the only reason you ever know
+         * which way is up down here. */
+        float ox = g_px, oy = g_py, oz = g_pz;
+        if (len > 0.0001f) {
+            float a = MOVE_SPEED * 3.4f * dt / len;
+            g_vx += mx * a; g_vy += my * a; g_vz += mz * a;
+            g_has_moved = 1;
+        }
+        g_vy += SWIM_LIFT * dt;
+        g_vx *= SWIM_DRAG; g_vy *= SWIM_DRAG; g_vz *= SWIM_DRAG;
+        try_move(g_vx * dt, g_vy * dt, g_vz * dt);
+        g_travelled += (float)sqrt((g_px-ox)*(g_px-ox) + (g_py-oy)*(g_py-oy)
+                                 + (g_pz-oz)*(g_pz-oz));
+    } else if (len > 0.0001f) {
         float s = MOVE_SPEED * dt / len;
         {   float ox = g_px, oy = g_py, oz = g_pz;
             try_move(mx * s, my * s, mz * s);
@@ -1638,6 +1720,23 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
         }
         g_has_moved = 1;
     }
+
+#ifdef DEMO_ENDING
+    /* the ending demo: one sounding, then it takes you */
+    g_demo -= dt;
+    if (g_demo <= 0.0f) { g_state = ST_WAKE; g_wake = 0.0f; return; }
+#endif
+
+    {   /* the flooded stretch, and the moment of crossing into it */
+        int wet = depth_is_wet(g_pz);
+        if (wet != g_wet) {
+            g_wet = wet;
+            audio_submerged(wet);
+            audio_splash();
+            g_vx = g_vy = g_vz = 0.0f;
+        }
+    }
+    if (g_wet) motes_refresh(now);
 
     if (-g_pz > g_best_depth) g_best_depth = -g_pz;
 
@@ -1725,6 +1824,12 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
         glDrawArrays(GL_POINTS, 0, g_count);
     }
 
+    if (g_wet) {   /* what the front catches on its way through the water */
+        glUniform1f(u_persist, 0.0f);
+        glBindVertexArray(g_movao);
+        glDrawArrays(GL_POINTS, 0, MOTES);
+    }
+
     /* the wave itself, crossing open air. Visible only while the front is on
      * it, so it sweeps through and leaves the map exactly as it found it. */
     if (g_wcount > 0) {
@@ -1745,7 +1850,8 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
     {   /* the readout */
         char left[40], right[40];
         const char *hint = g_has_moved ? "" : "WASD TO MOVE";
-        sprintf(left, "STAGE %d   %5.1f M", g_stage + 1,
+        sprintf(left, g_wet ? "STAGE %d   %5.1f M  SUBMERGED"
+                            : "STAGE %d   %5.1f M", g_stage + 1,
                 -g_pz < 0.0f ? 0.0f : -g_pz);
         sprintf(right, "LIFE %s", g_lives >= 3 ? "* * *"
                                 : (g_lives == 2 ? "* *" : (g_lives == 1 ? "*" : "-")));

@@ -101,6 +101,28 @@ static const char *WAKE_FS =
 "  vec2 d = abs(vec2(length(p.xz), p.y)) - vec2(r, h);\n"
 "  return min(max(d.x, d.y), 0.0) + length(max(d, 0.0)); }\n"
 "\n"
+"float smin(float a, float b, float k){\n"
+"  float h = clamp(0.5 + 0.5*(b-a)/k, 0.0, 1.0);\n"
+"  return mix(b, a, h) - k*h*(1.0-h); }\n"
+"float cap(vec3 p, vec3 a, vec3 b, float r){\n"
+"  vec3 pa = p-a, ba = b-a;\n"
+"  float h = clamp(dot(pa,ba)/dot(ba,ba), 0.0, 1.0);\n"
+"  return length(pa - ba*h) - r; }\n"
+
+/* A sphere on a box reads as a ball on a pillar, which is what it was. What
+   makes a shape read as a person is the run from shoulder to neck to head and
+   the arms hanging beside it - so it is built as limbs and fused with a
+   smooth minimum into one body. Seen from a bed it stands over you. */
+"float person(vec3 p){\n"
+"  float d = cap(p, vec3(-0.10,-0.25,0.0), vec3(-0.06,0.62,0.0), 0.115);\n"
+"  d = min(d, cap(p, vec3(0.10,-0.25,0.0), vec3(0.06,0.62,0.0), 0.115));\n"
+"  d = smin(d, cap(p, vec3(0.0,0.58,0.0), vec3(0.0,1.06,-0.02), 0.205), 0.10);\n"
+"  d = smin(d, cap(p, vec3(0.0,1.06,-0.02), vec3(0.0,1.19,-0.01), 0.075), 0.05);\n"
+"  d = smin(d, length(p - vec3(0.0,1.34,0.0)) - 0.125, 0.045);\n"
+"  d = smin(d, cap(p, vec3(-0.21,1.00,0.0), vec3(-0.25,0.50,0.10), 0.058), 0.05);\n"
+"  d = smin(d, cap(p, vec3( 0.21,1.00,0.0), vec3( 0.26,0.52,0.12), 0.058), 0.05);\n"
+"  return d; }\n"
+
 "// returns distance; id says what was hit\n"
 "float scene(vec3 p, out float id){\n"
 "  float d = -box(p - vec3(0.0, 1.30, 0.0), vec3(3.30, 1.55, 4.20));\n"
@@ -114,9 +136,7 @@ static const char *WAKE_FS =
 "  if (rail < d) { d = rail; id = 4.0; }       // bed rail\n"
 "  float stand = cyl(p - vec3(2.30, 1.10, -1.80), 0.035, 1.10);\n"
 "  if (stand < d) { d = stand; id = 4.0; }     // drip stand\n"
-"  vec3 fp = p - vec3(1.55, 1.05, -1.10);\n"
-"  float fig = min(box(fp, vec3(0.30, 0.55, 0.20)),\n"
-"                  length(fp - vec3(0.0, 0.78, 0.0)) - 0.20);\n"
+"  float fig = person(p - vec3(1.42, 0.00, -0.95));\n"
 "  if (fig < d) { d = fig; id = 5.0; }         // someone standing there\n"
 "  return d; }\n"
 "\n"
