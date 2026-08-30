@@ -15,6 +15,11 @@
 #define NBUF         8
 #define MAX_VOICES   8
 
+/* Two combs of coprime length. One alone rings like a pipe; two beat against
+ * each other and read as a space with walls somewhere out there. */
+#define REV_A        6113
+#define REV_B        8971
+
 enum { V_PING, V_ROAR, V_HIT };
 
 typedef struct {
@@ -30,6 +35,9 @@ static short    g_buf[NBUF][BUF_SAMPLES];
 static Voice    g_voices[MAX_VOICES];
 static unsigned g_rng = 0x1234567u;
 static int      g_ready;
+
+static float g_reva[REV_A], g_revb[REV_B];
+static int   g_ia, g_ib;
 
 static float frand(void)
 {
@@ -59,10 +67,13 @@ static float voice_sample(Voice *v)
     float s = 0.0f;
 
     if (v->kind == V_PING) {
-        /* a short descending chirp - it should read as "you did that" */
-        float f   = 1500.0f - 1000.0f * x;
-        float env = (float)exp(-x * 5.0f) * (x < 0.02f ? x / 0.02f : 1.0f);
-        s = (float)sin(6.2831853 * f * v->t) * env * 0.30f;
+        /* A drop into still water. The pitch RISES as the cavity collapses -
+         * that rise is the whole reason a bloop reads as water and a falling
+         * chirp reads as a machine. */
+        float f    = 330.0f + 1150.0f * x * x;
+        float body = (float)sin(6.2831853 * f * v->t) * (float)exp(-x * 9.0);
+        float slap = frand() * (float)exp(-x * 55.0) * 0.35f;
+        s = body * 0.42f + slap;
     } else if (v->kind == V_ROAR) {
         /* low, detuned, and it slides down as it commits to the charge */
         float f   = 78.0f - 30.0f * x;
@@ -81,17 +92,29 @@ static void render(short *out, int n)
 {
     int i, j;
     for (i = 0; i < n; i++) {
-        float mix = 0.0f;
+        float dry = 0.0f, wet, mix;
+
         for (j = 0; j < MAX_VOICES; j++) {
             Voice *v = &g_voices[j];
             if (!v->active) continue;
-            mix += voice_sample(v);
+            dry += voice_sample(v);
             v->t += 1.0f / (float)SR;
             if (v->t >= v->dur) v->active = 0;
         }
+
+        /* The ping should not stop at the edge of the screen. Feeding it back
+         * through two delays makes it travel out, hit something, and come
+         * back - which is the sound of the mechanic, not decoration. */
+        wet = g_reva[g_ia] * 0.62f + g_revb[g_ib] * 0.48f;
+        g_reva[g_ia] = dry + g_revb[g_ib] * 0.34f;
+        g_revb[g_ib] = dry + g_reva[g_ia] * 0.30f;
+        if (++g_ia >= REV_A) g_ia = 0;
+        if (++g_ib >= REV_B) g_ib = 0;
+
+        mix = dry + wet * 0.55f;
         if (mix >  1.0f) mix =  1.0f;
         if (mix < -1.0f) mix = -1.0f;
-        out[i] = (short)(mix * 30000.0f);
+        out[i] = (short)(mix * 27000.0f);
     }
 }
 
@@ -151,6 +174,6 @@ void audio_shutdown(void)
     g_ready = 0;
 }
 
-void audio_ping(void) { voice_start(V_PING, 0.34f); }
+void audio_ping(void) { voice_start(V_PING, 0.55f); }
 void audio_roar(void) { voice_start(V_ROAR, 1.70f); }
 void audio_hit(void)  { voice_start(V_HIT,  0.55f); }

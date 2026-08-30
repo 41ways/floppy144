@@ -46,6 +46,13 @@ static GLuint g_vao, g_vbo, g_mvao, g_mvbo, g_prog;
 static GLint  u_vp, u_cam, u_time, u_monster;
 static Point  g_mpts[MON_POINTS];
 
+/* --- state -------------------------------------------------------------- */
+
+enum { ST_TITLE, ST_PLAY };
+static int g_state;
+
+extern int plat_text_points(const char *str, int px, float *out_xy, int max);
+
 /* --- player ------------------------------------------------------------- */
 
 static float g_px, g_py, g_pz;
@@ -219,23 +226,6 @@ static int mon_target_count(void)
     return 1;
 }
 
-/* A ping does not travel instantly, so the moment it reaches them is
- * scheduled rather than immediate. That delay is the eerie beat between
- * firing and hearing the answer. */
-static void mon_hear_ping(float ox, float oy, float oz, float now)
-{
-    int i;
-    for (i = 0; i < g_mon_count; i++) {
-        Monster *m = &g_mon[i];
-        float dx = m->x - ox, dy = m->y - oy, dz = m->z - oz;
-        float d  = (float)sqrt(dx * dx + dy * dy + dz * dz);
-        if (m->state != MON_DORMANT) continue;
-        if (d > m->hear) continue;
-        m->wake = now + d / WAVE_SPEED;
-        m->tx = ox; m->ty = oy; m->tz = oz;   /* it remembers where, not who */
-    }
-}
-
 static int mon_step(Monster *m, float dt, float now)
 {
     float dx, dy, dz, d;
@@ -313,24 +303,64 @@ static void mon_emit_points(const Monster *m, float now)
 }
 
 /* --- ping ----------------------------------------------------------------
- * Rays are spread over the sphere with the golden angle, which covers evenly
- * instead of clumping at the poles the way naive lat/long sampling does. */
+ * On foot the ping is a beam, not a sphere: it lights what you are facing and
+ * nothing else. That makes looking a deliberate act with a direction, and it
+ * means the dark behind you stays dark. (The full spherical wave comes back
+ * when the cave floods and you are swimming.)
+ *
+ * Directions are laid out over the spherical cap with the golden angle, which
+ * covers evenly instead of clumping in the middle. */
 
-static void emit_ping(float now)
+#define CONE_HALF_ANGLE 0.42f      /* radians, about 24 degrees */
+
+static float ping_reach(void)
+{
+    return 26.0f - 11.0f * depth_k(g_pz);   /* rock swallows more, deeper */
+}
+
+/* Did the beam actually land on it? Being behind you, or around a corner,
+ * means it never knows you were there. */
+static void mon_lit_by(const float *f, float reach, float now)
+{
+    int i;
+    for (i = 0; i < g_mon_count; i++) {
+        Monster *m = &g_mon[i];
+        float dx = m->x - g_px, dy = m->y - g_py, dz = m->z - g_pz;
+        float d  = (float)sqrt(dx * dx + dy * dy + dz * dz);
+        float cosang, wall;
+
+        if (m->state != MON_DORMANT) continue;
+        if (d > reach || d > m->hear || d < 0.001f) continue;
+
+        cosang = (dx * f[0] + dy * f[1] + dz * f[2]) / d;
+        if (cosang < (float)cos(CONE_HALF_ANGLE)) continue;   /* outside the beam */
+
+        /* rock in between swallows it */
+        if (cave_ray(g_px, g_py, g_pz, dx / d, dy / d, dz / d, d, &wall)) continue;
+
+        m->wake = now + d / WAVE_SPEED;
+        m->tx = g_px; m->ty = g_py; m->tz = g_pz;  /* it remembers where, not who */
+    }
+}
+
+static void emit_ping(float now, const float *f, const float *r, const float *u)
 {
     int i;
     int start = g_count;
     int added = 0;
-    float reach = 26.0f - 11.0f * depth_k(g_pz);   /* rock swallows more, deeper */
+    float reach = ping_reach();
+    float cosmax = (float)cos(CONE_HALF_ANGLE);
 
     for (i = 0; i < PING_RAYS; i++) {
         float k     = ((float)i + 0.5f) / (float)PING_RAYS;
-        float phi   = (float)acos(1.0 - 2.0 * k);
-        float theta = 2.39996323f * (float)i;          /* golden angle */
-        float sp    = (float)sin(phi);
-        float dx    = sp * (float)cos(theta);
-        float dy    = (float)cos(phi);
-        float dz    = sp * (float)sin(theta);
+        float ct    = 1.0f - k * (1.0f - cosmax);        /* uniform on the cap */
+        float st    = (float)sqrt(1.0f - ct * ct);
+        float ph    = 2.39996323f * (float)i;            /* golden angle */
+        float lx    = st * (float)cos(ph);
+        float ly    = st * (float)sin(ph);
+        float dx    = r[0] * lx + u[0] * ly + f[0] * ct;
+        float dy    = r[1] * lx + u[1] * ly + f[1] * ct;
+        float dz    = r[2] * lx + u[2] * ly + f[2] * ct;
         float t;
 
         if (g_count >= MAX_POINTS) break;
@@ -353,7 +383,7 @@ static void emit_ping(float now)
     }
 
     audio_ping();
-    mon_hear_ping(g_px, g_py, g_pz, now);
+    mon_lit_by(f, reach, now);
 }
 
 /* --- matrices ----------------------------------------------------------- */
@@ -407,7 +437,13 @@ static void mat4_view(float *m, float px, float py, float pz,
 static void respawn(float now)
 {
     int i;
-    g_px = 0.0f; g_py = 0.0f; g_pz = 0.0f;
+    float cx, cy;
+    /* The tunnel does not run through the origin - rerolling the seed moves
+     * it. Spawning at 0,0,0 therefore buried the player inside rock, where
+     * every ping ray hit a wall 6 cm away and the screen filled with a ball
+     * of yellow returns. Start on the axis instead. */
+    tunnel_centre(0.0f, &cx, &cy);
+    g_px = cx; g_py = cy; g_pz = 0.0f;
     g_yaw = 0.0f; g_pitch = 0.0f;
     g_ping_ready = now + 0.6f;
     g_mon_count = mon_target_count();
@@ -427,6 +463,47 @@ static void new_attempt(unsigned seed, float now)
     g_lives  = START_LIVES;
     g_best_depth = 0.0f;
     respawn(now);
+}
+
+/* --- title ---------------------------------------------------------------
+ * Not an overlay: the words are scattered into the cave as points and lit by
+ * the same wavefront as the walls. Two seconds of it teaches the whole game -
+ * a click throws light, light reveals, revealed things linger. */
+
+static float g_title_pulse;
+
+static void title_line(const char *str, int px, float scale, float yoff,
+                       float delay, float now)
+{
+    static float xy[9000];
+    int n, i;
+
+    n = plat_text_points(str, px, xy, 4000);
+    for (i = 0; i < n && g_count < MAX_POINTS; i++) {
+        float x = g_px + xy[i * 2 + 0] * scale;
+        float y = g_py - xy[i * 2 + 1] * scale + yoff;   /* bitmaps run down */
+        float z = g_pz - 5.0f;
+        float dx = x - g_px, dy = y - g_py, dz = z - g_pz;
+        float d  = (float)sqrt(dx * dx + dy * dy + dz * dz);
+        g_pts[g_count].x = x;
+        g_pts[g_count].y = y;
+        g_pts[g_count].z = z;
+        g_pts[g_count].reveal = now + delay + d / WAVE_SPEED;
+        g_count++;
+    }
+}
+
+static void enter_title(float now)
+{
+    g_state = ST_TITLE;
+    g_count = 0;
+    title_line("SOUNDING",       150, 2.05f, 0.55f, 0.30f, now);
+    title_line("CLICK TO START",  40, 2.05f, -1.15f, 1.10f, now);
+
+    glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
+    glBufferSubData(GL_ARRAY_BUFFER, 0,
+                    (GLsizeiptr)(g_count * (int)sizeof(Point)), g_pts);
+    g_title_pulse = now + 3.0f;      /* let the wave wash over it again */
 }
 
 /* --- setup -------------------------------------------------------------- */
@@ -475,6 +552,7 @@ void game_init(unsigned seed)
     glDisable(GL_DEPTH_TEST);             /* additive, so order does not matter */
 
     new_attempt(seed, 0.0f);
+    enter_title(0.0f);
 }
 
 /* --- movement ------------------------------------------------------------
@@ -495,6 +573,32 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
     float proj[16], view[16], vp[16];
     float limit = 1.5533f;                       /* just under 89 degrees */
     int i, want;
+
+    if (g_state == ST_TITLE) {
+        if (now > g_title_pulse) enter_title(now);   /* wash the wave over again */
+        if (in->ping) {
+            g_state = ST_PLAY;
+            new_attempt((unsigned)(now * 100000.0f) ^ rnd(), now);
+            g_ping_ready = now + 0.35f;
+        }
+        glClearColor(0.008f, 0.012f, 0.020f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        if (g_count > 0) {
+            mat4_persp(proj, 1.30f,
+                       (float)width / (height > 0 ? (float)height : 1.0f),
+                       0.05f, 60.0f);
+            mat4_view(view, g_px, g_py, g_pz, g_yaw, g_pitch);
+            mat4_mul(vp, proj, view);
+            glUseProgram(g_prog);
+            glUniformMatrix4fv(u_vp, 1, GL_FALSE, vp);
+            glUniform3f(u_cam, g_px, g_py, g_pz);
+            glUniform1f(u_time, now);
+            glUniform1f(u_monster, 0.0f);
+            glBindVertexArray(g_vao);
+            glDrawArrays(GL_POINTS, 0, g_count);
+        }
+        return;
+    }
 
     /* look */
     g_yaw   += in->mdx * MOUSE_SENS;
@@ -520,7 +624,7 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
 
     /* ping */
     if (in->ping && now >= g_ping_ready) {
-        emit_ping(now);
+        emit_ping(now, f, r, u);
         g_ping_ready = now + PING_COOLDOWN;
     }
 
@@ -537,8 +641,9 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
             g_flash = 1.0f;
             audio_hit();
             if (g_lives <= 0) {
-                /* the last life: throw the cave away and roll a new one */
+                /* the last life: throw the cave away and offer a new one */
                 new_attempt((unsigned)(now * 1000.0f) ^ rnd(), now);
+                enter_title(now);
             } else {
                 /* you keep the map - walking back down is the reward for it */
                 respawn(now);

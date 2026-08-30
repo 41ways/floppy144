@@ -9,6 +9,7 @@
 #include "audio.h"
 
 #include <stdio.h>
+#include <string.h>
 
 #define APP_TITLE   "SOUNDING"
 #define APP_CLASS   "sounding_window"
@@ -170,6 +171,70 @@ GLuint gfx_build_program(const char *vs_src, const char *fs_src)
     glDeleteShader(vs);
     glDeleteShader(fs);
     return prog;
+}
+
+/* Rasterise a string with GDI and hand back its lit pixels, normalised so the
+ * word spans roughly two units across and is centred on the origin.
+ *
+ * No font ships with the game: Windows already has several, and letters that
+ * arrive as pixels can be scattered into space and swept by the same wavefront
+ * as the cave walls. The title is therefore not type drawn over the game - it
+ * is geometry inside it. The same path will take Korean later for free. */
+int plat_text_points(const char *str, int px, float *out_xy, int max_pts)
+{
+    HDC        dc  = CreateCompatibleDC(0);
+    BITMAPINFO bi;
+    void      *bits = 0;
+    HBITMAP    bmp;
+    HFONT      font, oldf;
+    HGDIOBJ    oldb;
+    unsigned  *p;
+    RECT       r;
+    const int  W = 1024, H = 256;
+    int        n = 0, x, y;
+
+    if (!dc) return 0;
+
+    ZeroMemory(&bi, sizeof bi);
+    bi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
+    bi.bmiHeader.biWidth       = W;
+    bi.bmiHeader.biHeight      = -H;              /* top-down rows */
+    bi.bmiHeader.biPlanes      = 1;
+    bi.bmiHeader.biBitCount    = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+
+    bmp = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &bits, 0, 0);
+    if (!bmp || !bits) { DeleteDC(dc); return 0; }
+    oldb = SelectObject(dc, bmp);
+
+    font = CreateFontA(px, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET,
+                       OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                       ANTIALIASED_QUALITY, FF_DONTCARE, "Consolas");
+    oldf = (HFONT)SelectObject(dc, font);
+
+    r.left = 0; r.top = 0; r.right = W; r.bottom = H;
+    FillRect(dc, &r, (HBRUSH)GetStockObject(BLACK_BRUSH));
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, RGB(255, 255, 255));
+    SetTextAlign(dc, TA_CENTER | TA_TOP);
+    TextOutA(dc, W / 2, (H - px) / 2, str, (int)strlen(str));
+    GdiFlush();
+
+    p = (unsigned *)bits;
+    for (y = 0; y < H && n < max_pts; y += 2)
+        for (x = 0; x < W && n < max_pts; x += 2)
+            if ((p[y * W + x] & 0xFFu) > 110u) {
+                out_xy[n * 2 + 0] = ((float)x - W * 0.5f) / (W * 0.25f);
+                out_xy[n * 2 + 1] = ((float)y - H * 0.5f) / (W * 0.25f);
+                n++;
+            }
+
+    SelectObject(dc, oldf);
+    DeleteObject(font);
+    SelectObject(dc, oldb);
+    DeleteObject(bmp);
+    DeleteDC(dc);
+    return n;
 }
 
 /* Keep the pointer pinned to the middle of the window and read how far it
