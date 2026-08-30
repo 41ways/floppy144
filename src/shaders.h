@@ -19,6 +19,7 @@ static const char *POINT_VS =
 "uniform float uFlat;\n"
 "uniform float uBase;\n"
 "uniform float uFade;\n"
+"uniform float uGrey;\n"
 "out float vBright;\n"
 "out float vDist;\n"
 "void main(){\n"
@@ -53,6 +54,7 @@ static const char *POINT_FS =
 "uniform float uMonster;\n"
 "uniform float uFlat;\n"
 "uniform float uInk;\n"
+"uniform float uGrey;\n"
 "out vec4 FragColor;\n"
 "void main(){\n"
 "  if (vBright < 0.02) discard;\n"
@@ -62,6 +64,8 @@ static const char *POINT_FS =
 /* lidar palette: near returns warm, far returns cold */
 "  float t = clamp(1.0 - vDist / 26.0, 0.0, 1.0);\n"
 "  vec3  c = mix(vec3(0.13, 0.20, 0.90), vec3(1.00, 0.62, 0.16), t * t);\n"
+/* deeper down the palette drains toward the room it is becoming */
+"  c = mix(c, vec3(dot(c, vec3(0.35))) * vec3(1.02, 1.03, 1.06), uGrey);\n"
 /* the thing does not scatter like rock - it comes back red, and brighter */
 "  c = mix(c, vec3(1.00, 0.13, 0.07), uMonster);\n"
 "  float a = vBright * exp(-vDist * 0.055);\n"
@@ -202,6 +206,7 @@ static const char *CAVE_FS =
 "uniform float uSeed, uWander, uRough, uTime;\n"
 "uniform float uLight;    // how much of it is lit from ahead\n"
 "uniform float uWet;      // stage two shines\n"
+"uniform float uRoom;     // the rock squaring into somewhere built\n"
 "\n"
 "uniform vec3  uBrA[9];\n"
 "uniform vec3  uBrB[9];\n"
@@ -235,6 +240,12 @@ static const char *CAVE_FS =
 "            + 1.15*uRough*fbm2(atan(d2.y, d2.x)*1.6, p.z*0.42 + uSeed)\n"
 "            + gate(p.z);\n"
 "  float m = rad - length(d2);\n"
+/* Toward the end the tunnel forgets how to be a tunnel. A box corridor
+   with the same axis takes over, corners first: the cave becomes
+   architecture around you before there is a room. */
+"  vec2 q = abs(vec2(p.x - c.x, p.y - c.y)) - vec2(2.30, 1.75);\n"
+"  float boxm = -max(q.x, q.y);\n"
+"  m = mix(m, boxm, uRoom);\n"
 "  int i0 = int(clamp(-p.z/34.0, 0.0, 7.0));\n"
 "  m = max(m, 1.75 - segd(p, uBrA[i0],   uBrB[i0]));\n"
 "  m = max(m, 1.75 - segd(p, uBrA[i0+1], uBrB[i0+1]));\n"
@@ -280,10 +291,12 @@ static const char *CAVE_FS =
 "  vec3 gp = vec3(grain(p+vec3(0.03,0.0,0.0)) - g0,\n"
 "                 grain(p+vec3(0.0,0.03,0.0)) - g0,\n"
 "                 grain(p+vec3(0.0,0.0,0.03)) - g0);\n"
-"  n = normalize(n - (gp - n*dot(gp,n)) * 1.6);\n"
+"  n = normalize(n - (gp - n*dot(gp,n)) * 1.6 * (1.0 - uRoom));\n"
 "\n"
 "  vec3 alb = mix(vec3(0.20,0.19,0.185), vec3(0.44,0.39,0.34), g0);\n"
 "  alb = mix(alb, vec3(0.30,0.34,0.38), uWet*0.55);\n"
+/* built surfaces are pale and even; the grain fades with the rock */
+"  alb = mix(alb, vec3(0.78, 0.79, 0.81), uRoom * 0.85);\n"
 "\n"
 "  vec2 lc = centre(uCam.z - 20.0);\n"
 "  vec3 lp = vec3(lc.x, lc.y + 0.6, uCam.z - 20.0);\n"
@@ -293,7 +306,7 @@ static const char *CAVE_FS =
 "  float ao  = occl(p, n);\n"
 "  float fre = pow(1.0 - max(dot(n, -rd), 0.0), 3.0);\n"
 "\n"
-"  vec3 warm = vec3(1.00, 0.93, 0.82);\n"
+"  vec3 warm = mix(vec3(1.00, 0.93, 0.82), vec3(0.97, 0.98, 1.00), uRoom);\n"
 "  vec3 col  = alb * (0.030 + 0.16*uLight) * ao;\n"
 "  col += alb * warm * dif * sh * (0.18 + 0.62*uLight);\n"
 "  col += warm * fre * (0.02 + 0.14*uLight) * ao;\n"

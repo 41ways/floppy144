@@ -25,7 +25,7 @@
 #define REV_C       12409
 #define AP_LEN       1051
 
-enum { V_PING, V_ROAR, V_HIT, V_BEEP, V_SPLASH };
+enum { V_PING, V_ROAR, V_HIT, V_BEEP, V_SPLASH, V_FLAT };
 
 typedef struct {
     int   active;
@@ -107,6 +107,20 @@ static float voice_sample(Voice *v)
         float band = frand() * (float)exp(-x * 14.0);
         float glug = (float)sin(6.2831853 * (240.0 - 180.0 * x) * v->t);
         s = (band * 0.55f + glug * 0.34f) * env * 0.75f;
+    } else if (v->kind == V_FLAT) {
+        /* two last beeps, then the tone that does not stop */
+        float t = v->t;
+        if (t < 0.42f)      s = (float)sin(6.2831853 * 1046.0 * t)
+                              * (t < 0.05f ? t / 0.05f : (float)exp(-(t - 0.05f) * 7.0f)) * 0.30f;
+        else if (t < 1.05f) { float u = t - 0.63f;
+            if (u > 0.0f) s = (float)sin(6.2831853 * 1046.0 * u)
+                            * (u < 0.05f ? u / 0.05f : (float)exp(-(u - 0.05f) * 7.0f)) * 0.30f; }
+        else {
+            float u = t - 1.05f;
+            float env = u < 0.10f ? u / 0.10f : 1.0f;
+            if (x > 0.86f) env *= (1.0f - x) / 0.14f;    /* let it die at the end */
+            s = (float)sin(6.2831853 * 988.0 * v->t) * env * 0.16f;
+        }
     } else if (v->kind == V_BEEP) {
         /* the flat blip of a bedside monitor, heard from under */
         float env = (x < 0.05f ? x / 0.05f : (float)exp(-(x - 0.05f) * 7.0f));
@@ -236,4 +250,9 @@ void audio_submerged(int under)
 void audio_splash(void)
 {
     voice_start(V_SPLASH, 1.10f);
+}
+
+void audio_flatline(void)
+{
+    voice_start(V_FLAT, 6.5f);
 }

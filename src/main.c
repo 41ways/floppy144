@@ -36,8 +36,15 @@ static int g_height   = WIN_H;
 static int g_captured = 0;     /* mouse locked to the window centre */
 static int g_ping     = 0;     /* a click arrived since the last frame */
 
+static int g_headless;    /* -shot: no dialogs, or the script waits forever */
+
 static void fail(const char *msg)
 {
+    if (g_headless) {
+        FILE *f = fopen("faillog.txt", "w");
+        if (f) { fputs(msg, f); fclose(f); }
+        ExitProcess(1);
+    }
     MessageBoxA(0, msg, APP_TITLE " - startup failed", MB_OK | MB_ICONERROR);
     ExitProcess(1);
 }
@@ -326,6 +333,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     if (cmd && strstr(cmd, "-depth")) sscanf(strstr(cmd, "-depth") + 6, "%f", &start_depth);
 
     if (cmd && strstr(cmd, "-shot")) {
+        g_headless = 1;
         char *p = strstr(cmd, "-shot") + 5;
         sscanf(p, "%259s %d %d %d", shot_path, &shot_at, &shot_ping, &shot_spider);
         if (shot_at <= 0) shot_at = 70;

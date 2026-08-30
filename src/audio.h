@@ -14,5 +14,6 @@ void audio_hit(void);      /* it reached you */
 void audio_beep(void);     /* the monitor, from the other side */
 void audio_splash(void);   /* going under */
 void audio_submerged(int under);  /* everything above 500 Hz leaves */
+void audio_flatline(void);        /* the monitor giving up */
 
 #endif /* AUDIO_H */

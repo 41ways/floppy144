@@ -56,7 +56,9 @@
 #define MOUSE_SENS      0.0022f
 #define PING_COOLDOWN   0.45f
 
+#ifndef START_LIVES
 #define START_LIVES        3
+#endif
 /* Four thresholds and an end. Difficulty is a curve across the whole descent
  * rather than one that flattens two thirds of the way down, and each gate is
  * a chamber wide enough that the ping goes out and does not come back - which
@@ -98,13 +100,13 @@ static GLint  u_vp, u_cam, u_time, u_monster, u_persist, u_flat, u_base, u_ink;
 static GLint  w_res, w_time, w_open, w_bright, w_sharp;
 static GLuint g_cave_prog;
 static GLint  c_res, c_cam, c_fwd, c_right, c_up, c_seed, c_wander,
-              c_rough, c_time, c_light, c_wet, c_bra, c_brb;
-static GLint  u_fade;
+              c_rough, c_time, c_light, c_wet, c_room, c_bra, c_brb;
+static GLint  u_fade, u_grey;
 static Point *g_mpts;          /* heap: 48 KB of it has no business in the exe */
 
 /* --- state -------------------------------------------------------------- */
 
-enum { ST_TITLE, ST_PLAY, ST_SURFACE, ST_WAKE };
+enum { ST_TITLE, ST_PLAY, ST_SURFACE, ST_WAKE, ST_FLATLINE };
 static int g_state;
 
 extern int plat_text_points(const char *str, int px, float *out_xy, int max);
@@ -122,6 +124,8 @@ static int   g_stage;
 static float g_stage_flash;
 static float g_wake;
 static float g_surf;              /* 0..1 through a glimpse of the room */
+static float g_flat;              /* 0..1 through the flatline */
+static int   g_pings;
 static float g_clarity;           /* how much of it resolves this time */
 static int   g_has_moved;
 static float g_travelled;
@@ -863,6 +867,7 @@ static void ping_begin(float now, const float *f, const float *r, const float *u
     g_ping_busy = 1;
     g_wcount = 0;                       /* the previous wave has passed */
 
+    g_pings++;
     audio_ping();
     mon_lit_by(f, ping_reach(), now);
 }
@@ -1113,6 +1118,7 @@ static void new_attempt(unsigned seed, float now)
     build_branches();
     build_room();
     g_count  = 0;
+    g_pings  = 0;
     g_lives  = START_LIVES;
     g_best_depth = 0.0f;
     g_has_moved = 0;
@@ -1414,6 +1420,7 @@ void game_init(unsigned seed, float start_depth)
     u_base    = glGetUniformLocation(g_prog, "uBase");
     u_ink     = glGetUniformLocation(g_prog, "uInk");
     u_fade    = glGetUniformLocation(g_prog, "uFade");
+    u_grey    = glGetUniformLocation(g_prog, "uGrey");
 
     g_wake_prog = gfx_build_program(WAKE_VS, WAKE_FS);
     w_res    = glGetUniformLocation(g_wake_prog, "uRes");
@@ -1435,6 +1442,7 @@ void game_init(unsigned seed, float start_depth)
     c_time   = glGetUniformLocation(g_cave_prog, "uTime");
     c_light  = glGetUniformLocation(g_cave_prog, "uLight");
     c_wet    = glGetUniformLocation(g_cave_prog, "uWet");
+    c_room   = glGetUniformLocation(g_cave_prog, "uRoom");
     c_bra    = glGetUniformLocation(g_cave_prog, "uBrA");
     c_brb    = glGetUniformLocation(g_cave_prog, "uBrB");
 
@@ -1541,6 +1549,93 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
     float proj[16], view[16], vp[16];
     float limit = 1.5533f;                       /* just under 89 degrees */
     int i, want;
+
+    if (g_state == ST_FLATLINE) {
+        /* A monitor losing its patient. The map you made stays on screen and
+         * dims - it outlives you - while the trace goes to a line. */
+        float e = g_flat;
+        char buf[48];
+        g_flat += dt / 6.5f;
+
+        glClearColor(0.015f + e * 0.010f, 0.008f, 0.010f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        if (g_count > 0) {
+            mat4_persp(proj, 1.30f,
+                       (float)width / (height > 0 ? (float)height : 1.0f), 0.05f, 60.0f);
+            mat4_view(view, g_px, g_py, g_pz, g_yaw, g_pitch);
+            mat4_mul(vp, proj, view);
+            glUseProgram(g_prog);
+            glUniformMatrix4fv(u_vp, 1, GL_FALSE, vp);
+            glUniform3f(u_cam, g_px, g_py, g_pz);
+            glUniform1f(u_time, now);
+            glUniform1f(u_flat, 0.0f);
+            glUniform1f(u_ink, 0.0f);
+            glUniform1f(u_monster, 0.0f);
+            glUniform1f(u_persist, 1.0f);
+            glUniform1f(u_base, 0.0f);
+            glUniform1f(u_grey, 1.0f);
+            glUniform1f(u_fade, 1.0f - smoothstep01(0.15f, 0.85f, e) * 0.88f);
+            glBindVertexArray(g_vao);
+            glDrawArrays(GL_POINTS, 0, g_count);
+            glUniform1f(u_fade, 1.0f);
+        }
+
+        {   /* the trace: a beat or two more, then flat */
+            int i, nseg = 220;
+            float beat = e < 0.32f ? (float)sin(now * 9.0f) : 0.0f;
+            g_hud_n = 0;
+            for (i = 0; i < nseg && g_hud_n < HUD_MAX; i++) {
+                float x  = -0.92f + 1.84f * (float)i / (float)(nseg - 1);
+                float ph = x * 14.0f + now * 2.2f;
+                float y  = -0.55f;
+                if (e < 0.32f) {
+                    float k = (float)fmod(ph, 6.2831853);
+                    if (k > 5.1f && k < 5.6f) y += (k - 5.1f) * 1.4f * beat;
+                }
+                g_hud[g_hud_n].x = x;
+                g_hud[g_hud_n].y = y;
+                g_hud[g_hud_n].z = 0.0f;
+                g_hud[g_hud_n].reveal = 0.0f;
+                g_hud[g_hud_n].gain = 0.9f;
+                g_hud_n++;
+            }
+            g_hud_cache[0] = 0;              /* the trace never caches */
+            glBindBuffer(GL_ARRAY_BUFFER, g_hvbo);
+            glBufferSubData(GL_ARRAY_BUFFER, 0,
+                            (GLsizeiptr)(g_hud_n * (int)sizeof(Point)), g_hud);
+            glUseProgram(g_prog);
+            glUniform1f(u_time, now);
+            glUniform1f(u_monster, 1.0f);    /* the line is red */
+            glUniform1f(u_persist, 1.0f);
+            glUniform1f(u_flat, 1.0f);
+            glUniform1f(u_base, 0.9f);
+            glUniform1f(u_grey, 0.0f);
+            glBindVertexArray(g_hvao);
+            glDrawArrays(GL_POINTS, 0, g_hud_n);
+        }
+
+        if (e > 0.55f) {
+            sprintf(buf, "DEPTH %5.1f M   %d SOUNDINGS", g_best_depth, g_pings);
+            hud_build_wake(e >= 1.0f ? "CLICK" : "SIGNAL LOST", buf);
+            if (g_hud_n > 0) {
+                glUniform1f(u_monster, 0.0f);
+                glUniform1f(u_flat, 1.0f);
+                glUniform1f(u_base, 0.55f);
+                glBindVertexArray(g_hvao);
+                glDrawArrays(GL_POINTS, 0, g_hud_n);
+            }
+        }
+        glUniform1f(u_flat, 0.0f);
+        glUniform1f(u_base, 0.0f);
+        glUniform1f(u_monster, 0.0f);
+
+        if (g_flat >= 1.0f && in->ping) {
+            new_attempt((unsigned)(now * 1000.0f) ^ rnd(), now);
+            enter_title(now);
+        }
+        return;
+    }
 
     if (g_state == ST_SURFACE) {
         /* Two and a half seconds of somewhere else. It comes up, holds, and
@@ -1702,6 +1797,7 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
                 float ph  = (float)fmod(now * 0.345, 1.0);
                 float sw  = (float)exp(-pow((ph - 0.5) / 0.20, 2.0));
                 glUniform1f(u_base, 0.30f + 0.62f * sw);
+                glUniform1f(u_grey, 0.0f);
             }
             glUniform1f(u_monster, 0.0f);
             glUniform1f(u_persist, 1.0f);
@@ -1757,6 +1853,12 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
     /* the ending demo: one sounding, then it takes you */
     g_demo -= dt;
     if (g_demo <= 0.0f) { g_state = ST_WAKE; g_wake = 0.0f; return; }
+#endif
+
+#ifdef DEMO_FLAT
+    if (now > 1.6f) {   /* test rig: straight to the monitor losing you */
+        g_state = ST_FLATLINE; g_flat = 0.0f; audio_flatline(); return;
+    }
 #endif
 
     {   /* the flooded stretch, and the moment of crossing into it */
@@ -1815,9 +1917,9 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
             g_flash = 1.0f;
             audio_hit();
             if (g_lives <= 0) {
-                /* the last life: throw the cave away and offer a new one */
-                new_attempt((unsigned)(now * 1000.0f) ^ rnd(), now);
-                enter_title(now);
+                g_state = ST_FLATLINE;
+                g_flat  = 0.0f;
+                audio_flatline();
             } else {
                 /* you keep the map - walking back down is the reward for it */
                 respawn(now);
@@ -1869,6 +1971,7 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
             glUniform1f(c_time, now);
             glUniform1f(c_light, sm);
             glUniform1f(c_wet, g_wet ? 1.0f : 0.0f);
+            glUniform1f(c_room, smoothstep01(GATE_3 + 8.0f, GATE_END - 4.0f, -g_pz));
             glUniform3fv(c_bra, 9, bra);
             glUniform3fv(c_brb, 9, brb);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -1885,6 +1988,7 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
         glUniform1f(u_ink, 0.0f);
         /* and the points step back as it arrives */
         glUniform1f(u_fade, 1.0f - sm * 0.82f);
+        glUniform1f(u_grey, smoothstep01(GATE_2, GATE_3 + 16.0f, -g_pz));
     }
 
     /* the map: surfaces, and they stay */
