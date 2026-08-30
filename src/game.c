@@ -96,6 +96,9 @@ static GLuint g_vao, g_vbo, g_wvao, g_wvbo, g_mvao, g_mvbo, g_hvao, g_hvbo,
               g_rvao, g_rvbo, g_prog, g_wake_prog, g_wvao_full;
 static GLint  u_vp, u_cam, u_time, u_monster, u_persist, u_flat, u_base, u_ink;
 static GLint  w_res, w_time, w_open, w_bright, w_sharp;
+static GLuint g_cave_prog;
+static GLint  c_res, c_cam, c_fwd, c_right, c_up, c_seed, c_wander,
+              c_rough, c_time, c_light, c_wet, c_bra, c_brb;
 static GLint  u_fade;
 static Point *g_mpts;          /* heap: 48 KB of it has no business in the exe */
 
@@ -181,6 +184,20 @@ static float fbm2(float a, float b)
 /* --- the cave ------------------------------------------------------------
  * How far down a point is, from 0 at the entrance to 1 at the worst depth.
  * Every difficulty dial in the game is a function of this one number. */
+
+/* Points give way to lit rock across stages three and four. Nothing is
+ * switched: at 58 m it is all points, by 105 m it is nearly all surface, and
+ * in between both are on screen at once - which is the whole idea. The light
+ * ahead comes up on the same curve, so the world does not just resolve, it
+ * gets lit. */
+static float surface_mix(float z)
+{
+    float d = -z;
+    float t = (d - GATE_2) / (GATE_END - 15.0f - GATE_2);
+    if (t < 0.0f) t = 0.0f;
+    if (t > 1.0f) t = 1.0f;
+    return t * t * (3.0f - 2.0f * t);
+}
 
 static float smoothstep01(float a, float b, float x)
 {
@@ -1406,6 +1423,21 @@ void game_init(unsigned seed, float start_depth)
     w_sharp  = glGetUniformLocation(g_wake_prog, "uSharp");
     glGenVertexArrays(1, &g_wvao_full);
 
+    g_cave_prog = gfx_build_program(WAKE_VS, CAVE_FS);   /* same fullscreen tri */
+    c_res    = glGetUniformLocation(g_cave_prog, "uRes");
+    c_cam    = glGetUniformLocation(g_cave_prog, "uCam");
+    c_fwd    = glGetUniformLocation(g_cave_prog, "uFwd");
+    c_right  = glGetUniformLocation(g_cave_prog, "uRight");
+    c_up     = glGetUniformLocation(g_cave_prog, "uUp");
+    c_seed   = glGetUniformLocation(g_cave_prog, "uSeed");
+    c_wander = glGetUniformLocation(g_cave_prog, "uWander");
+    c_rough  = glGetUniformLocation(g_cave_prog, "uRough");
+    c_time   = glGetUniformLocation(g_cave_prog, "uTime");
+    c_light  = glGetUniformLocation(g_cave_prog, "uLight");
+    c_wet    = glGetUniformLocation(g_cave_prog, "uWet");
+    c_bra    = glGetUniformLocation(g_cave_prog, "uBrA");
+    c_brb    = glGetUniformLocation(g_cave_prog, "uBrB");
+
     glGenVertexArrays(1, &g_vao);
     glGenBuffers(1, &g_vbo);
     glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
@@ -1816,6 +1848,45 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
     glUniform1f(u_flat, 0.0f);
     glUniform1f(u_base, 0.0f);
 
+    {   /* the rock itself, once there is enough of the world to light */
+        float sm = surface_mix(g_pz);
+        if (sm > 0.004f) {
+            float bra[27], brb[27];
+            int b;
+            for (b = 0; b < 9; b++) {
+                bra[b*3+0] = g_br[b][0]; bra[b*3+1] = g_br[b][1]; bra[b*3+2] = g_br[b][2];
+                brb[b*3+0] = g_br[b][3]; brb[b*3+1] = g_br[b][4]; brb[b*3+2] = g_br[b][5];
+            }
+            glUseProgram(g_cave_prog);
+            glUniform2f(c_res, (float)width, (float)height);
+            glUniform3f(c_cam, g_px, g_py, g_pz);
+            glUniform3f(c_fwd, f[0], f[1], f[2]);
+            glUniform3f(c_right, r[0], r[1], r[2]);
+            glUniform3f(c_up, u[0], u[1], u[2]);
+            glUniform1f(c_seed, g_seed);
+            glUniform1f(c_wander, g_wander);
+            glUniform1f(c_rough, g_rough);
+            glUniform1f(c_time, now);
+            glUniform1f(c_light, sm);
+            glUniform1f(c_wet, g_wet ? 1.0f : 0.0f);
+            glUniform3fv(c_bra, 9, bra);
+            glUniform3fv(c_brb, 9, brb);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            glBindVertexArray(g_wvao_full);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+            glBlendFunc(GL_ONE, GL_ONE);
+        }
+        glUseProgram(g_prog);
+        glUniformMatrix4fv(u_vp, 1, GL_FALSE, vp);
+        glUniform3f(u_cam, g_px, g_py, g_pz);
+        glUniform1f(u_time, now);
+        glUniform1f(u_flat, 0.0f);
+        glUniform1f(u_base, 0.0f);
+        glUniform1f(u_ink, 0.0f);
+        /* and the points step back as it arrives */
+        glUniform1f(u_fade, 1.0f - sm * 0.82f);
+    }
+
     /* the map: surfaces, and they stay */
     if (g_count > 0) {
         glUniform1f(u_monster, 0.0f);
@@ -1860,6 +1931,7 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
         if (g_hud_n > 0) {
             glUniform1f(u_monster, 0.0f);
             glUniform1f(u_persist, 1.0f);
+            glUniform1f(u_fade, 1.0f);
             glUniform1f(u_flat, 1.0f);
             glBindVertexArray(g_hvao);
             glDrawArrays(GL_POINTS, 0, g_hud_n);

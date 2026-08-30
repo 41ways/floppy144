@@ -74,6 +74,7 @@ typedef ptrdiff_t GLintptr;
   X(PFNGLUNIFORM1I,         void,    glUniform1i,         (GLint, GLint)) \
   X(PFNGLUNIFORM2F,         void,    glUniform2f,         (GLint, GLfloat, GLfloat)) \
   X(PFNGLUNIFORM3F,         void,    glUniform3f,         (GLint, GLfloat, GLfloat, GLfloat)) \
+  X(PFNGLUNIFORM3FV,        void,    glUniform3fv,        (GLint, GLsizei, const GLfloat*)) \
   X(PFNGLUNIFORM4F,         void,    glUniform4f,         (GLint, GLfloat, GLfloat, GLfloat, GLfloat)) \
   X(PFNGLUNIFORMMATRIX4FV,  void,    glUniformMatrix4fv,  (GLint, GLsizei, GLboolean, const GLfloat*))
 
