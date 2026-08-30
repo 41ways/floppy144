@@ -62,7 +62,7 @@ static int    g_count;
 static Point *g_wpts;          /* the wave in flight, a ring that nobody reads back */
 static int    g_wcount;
 static GLuint g_vao, g_vbo, g_wvao, g_wvbo, g_mvao, g_mvbo, g_hvao, g_hvbo, g_prog;
-static GLint  u_vp, u_cam, u_time, u_monster, u_persist, u_flat;
+static GLint  u_vp, u_cam, u_time, u_monster, u_persist, u_flat, u_base;
 static Point  g_mpts[MON_POINTS];
 
 /* --- state -------------------------------------------------------------- */
@@ -688,13 +688,14 @@ static void title_line(const char *str, int px, float scale, float yoff,
         float x = g_px + g_text_xy[i * 2 + 0] * scale;
         float y = g_py - g_text_xy[i * 2 + 1] * scale + yoff;   /* bitmaps run down */
         float z = g_pz - 5.0f;
-        /* Not a wavefront here: the letters come up left to right, the way a
-         * monitor lights its display when someone switches it on. */
-        float sweep = (g_text_xy[i * 2 + 0] + 2.0f) * 0.155f;
+        /* No wavefront on the title. It is simply lit, and the whole word
+         * swells and settles together - a monitor breathing rather than one
+         * being switched on over and over. Brightness comes from uBase. */
+        (void)delay;
         g_pts[g_count].x = x;
         g_pts[g_count].y = y;
         g_pts[g_count].z = z;
-        g_pts[g_count].reveal = now + delay + sweep;
+        g_pts[g_count].reveal = now - 1000.0f;
         g_pts[g_count].gain   = 1.0f;
         g_count++;
     }
@@ -710,7 +711,7 @@ static void enter_title(float now)
     glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
     glBufferSubData(GL_ARRAY_BUFFER, 0,
                     (GLsizeiptr)(g_count * (int)sizeof(Point)), g_pts);
-    g_title_pulse = now + 3.6f;      /* let the wave wash over it again */
+    g_title_pulse = now + 2.9f;      /* let the wave wash over it again */
 }
 
 /* --- the readout --------------------------------------------------------
@@ -793,6 +794,7 @@ void game_init(unsigned seed)
     u_monster = glGetUniformLocation(g_prog, "uMonster");
     u_persist = glGetUniformLocation(g_prog, "uPersist");
     u_flat    = glGetUniformLocation(g_prog, "uFlat");
+    u_base    = glGetUniformLocation(g_prog, "uBase");
 
     glGenVertexArrays(1, &g_vao);
     glGenBuffers(1, &g_vbo);
@@ -852,7 +854,6 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
     int i, want;
 
     if (g_state == ST_TITLE) {
-        if (now > g_title_pulse) enter_title(now);   /* wash the wave over again */
         if (in->ping) {
             /* the click that starts the game is also the first sounding, so
              * the cave answers immediately instead of staying black */
@@ -876,6 +877,12 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
             glUniform3f(u_cam, g_px, g_py, g_pz);
             glUniform1f(u_time, now);
             glUniform1f(u_flat, 0.0f);
+            {   /* a slow swell: lit throughout, brightest once every three
+                 * seconds, then back to where it was */
+                float ph  = (float)fmod(now * 0.345, 1.0);
+                float sw  = (float)exp(-pow((ph - 0.5) / 0.20, 2.0));
+                glUniform1f(u_base, 0.30f + 0.62f * sw);
+            }
             glUniform1f(u_monster, 0.0f);
             glUniform1f(u_persist, 1.0f);
             glBindVertexArray(g_vao);
@@ -957,6 +964,7 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
     glUniform3f(u_cam, g_px, g_py, g_pz);
     glUniform1f(u_time, now);
     glUniform1f(u_flat, 0.0f);
+    glUniform1f(u_base, 0.0f);
 
     /* the map: surfaces, and they stay */
     if (g_count > 0) {

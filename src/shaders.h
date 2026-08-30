@@ -17,6 +17,7 @@ static const char *POINT_VS =
 "uniform float uTime;\n"
 "uniform float uPersist;\n"
 "uniform float uFlat;\n"
+"uniform float uBase;\n"
 "out float vBright;\n"
 "out float vDist;\n"
 "void main(){\n"
@@ -36,7 +37,11 @@ static const char *POINT_VS =
 "  float memory = (age > 0.0 ? 0.17 : 0.0) * uPersist;\n"
 /* a metre of free sight so the player never walks off a ledge blind */
 "  float close  = exp(-pow(d / 1.45, 2.0)) * 0.22 * uPersist;\n"
-"  vBright = mix(max(max(front, memory), close), 1.0, uFlat) * aGain;\n"
+/* uBase holds a thing lit whatever the wavefront is doing, so the title
+   swells as the sweep crosses it and settles back rather than going
+   dark and coming on again. */
+"  float lit = max(max(max(front, memory), close), uBase);\n"
+"  vBright = mix(lit, 1.0, uFlat) * aGain;\n"
 "  gl_PointSize = mix(clamp(190.0 / max(clip.w, 0.25), 1.7, 4.6), 2.0, uFlat);\n"
 "}\n";
 
