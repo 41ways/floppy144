@@ -12,6 +12,7 @@
 
 #define APP_TITLE   "SOUNDING"
 #define APP_CLASS   "sounding_window"
+#define BOOT_CLASS  "sounding_boot"
 #define WIN_W       1280
 #define WIN_H       720
 
@@ -88,7 +89,7 @@ static void load_wgl_extensions(HINSTANCE inst)
     PIXELFORMATDESCRIPTOR pfd;
     int   fmt;
 
-    dummy = CreateWindowExA(0, APP_CLASS, "", WS_OVERLAPPEDWINDOW,
+    dummy = CreateWindowExA(0, BOOT_CLASS, "", WS_OVERLAPPEDWINDOW,
                             CW_USEDEFAULT, CW_USEDEFAULT, 64, 64,
                             0, 0, inst, 0);
     if (!dummy) fail("Could not create the bootstrap window.");
@@ -234,6 +235,17 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     wc.hCursor       = LoadCursorA(0, IDC_ARROW);
     wc.lpszClassName = APP_CLASS;
     if (!RegisterClassA(&wc)) fail("Could not register the window class.");
+
+    /* The throwaway window used to fish the WGL extensions out of the driver
+     * gets its own class and the default handler. Sharing the game's wndproc
+     * means DestroyWindow() on it fires WM_DESTROY into the game's quit path
+     * and the program exits the moment it starts. */
+    ZeroMemory(&wc, sizeof wc);
+    wc.style         = CS_OWNDC;
+    wc.lpfnWndProc   = DefWindowProcA;
+    wc.hInstance     = inst;
+    wc.lpszClassName = BOOT_CLASS;
+    if (!RegisterClassA(&wc)) fail("Could not register the bootstrap class.");
 
     load_wgl_extensions(inst);
 
