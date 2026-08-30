@@ -63,11 +63,14 @@
  * rather than one that flattens two thirds of the way down, and each gate is
  * a chamber wide enough that the ping goes out and does not come back - which
  * is the only announcement the game makes. */
-#define DEPTH_FULL     120.0f  /* metres at which the cave is at its worst */
-#define GATE_1          28.0f
-#define GATE_2          58.0f
-#define GATE_3          90.0f
-#define GATE_END       120.0f
+#define DEPTH_FULL     480.0f  /* metres at which the cave is at its worst */
+#define GATE_1         120.0f
+#define GATE_2         240.0f
+#define GATE_3         360.0f
+#define GATE_END       480.0f
+/* Past the last gate the corridor runs on to a door. Opening it is the
+ * ending; the eyelid sequence starts from the handle, not from a depth. */
+#define WAKE_Z        (GATE_END + 17.0f)
 #define GATE_R           9.5f  /* how wide a threshold chamber opens */
 #define GATE_W           5.0f  /* and how long it runs
  */
@@ -83,7 +86,7 @@
 #define SWING_TIME     0.11f   /* and how long the step through the air takes */
 #define DASH_ON        0.22f   /* it runs in bursts, not at a constant speed */
 #define DASH_OFF       0.15f
-#define MON_RANGE      16.0f   /* how far it will chase before it comes apart */
+#define MON_RANGE      24.0f   /* how far it will chase before it comes apart */
 #define BURST_TIME     0.55f   /* and how long it takes to scatter */
 
 /* --- point cloud -------------------------------------------------------- */
@@ -267,7 +270,7 @@ static float seg_dist(float px, float py, float pz,
     return (float)sqrt(wx * wx + wy * wy + wz * wz);
 }
 
-#define BRANCHES 9
+#define BRANCHES 16
 
 static float g_br[BRANCHES][6];   /* ax ay az bx by bz, worked out once */
 
@@ -332,6 +335,10 @@ static float cave_sdf(float x, float y, float z)
         + gate_bulge(z);
     {   /* whichever is more open here, the main passage or a branch */
         float main_air = rad - r;
+        {   /* the corridor ends at the door */
+            float wall = z + WAKE_Z;
+            if (wall < main_air) main_air = wall;
+        }
         int   i0 = (int)(-z / BRANCH_SPACING);
         float b0 = branch_air(x, y, z, i0);
         float b1 = branch_air(x, y, z, i0 + 1);
@@ -665,12 +672,17 @@ static void mon_feet(Monster *m, float dt, const float *f, const float *sd, cons
             m->foot[i][0] = m->fa[i][0] + (m->fb[i][0] - m->fa[i][0]) * e + n[0] * lift;
             m->foot[i][1] = m->fa[i][1] + (m->fb[i][1] - m->fa[i][1]) * e + n[1] * lift;
             m->foot[i][2] = m->fa[i][2] + (m->fb[i][2] - m->fa[i][2]) * e + n[2] * lift;
-        } else if (mine) {                 /* planted: pick it up if it lags */
+        } else {                           /* planted: pick it up if it lags */
             float dx = want[0] - m->foot[i][0];
             float dy = want[1] - m->foot[i][1];
             float dz = want[2] - m->foot[i][2];
             float st = STRIDE * m->scale;
-            if (dx*dx + dy*dy + dz*dz > st * st) {
+            float lag = dx*dx + dy*dy + dz*dz;
+            /* Waiting for your half of the gait is how walking works - but a
+             * foot left two strides behind is how legs ended up pinned to the
+             * rock, stretched flat behind a body that had moved on. Past that
+             * point it steps regardless. */
+            if (lag > st * st * (mine ? 1.0f : 3.2f)) {
                 int k;
                 for (k = 0; k < 3; k++) m->fa[i][k] = m->foot[i][k];
                 /* overshoot slightly, the way a stepping leg reaches ahead */
@@ -1888,8 +1900,7 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
             g_stage++;
             g_stage_flash = 1.0f;
             if (g_stage >= 4) {
-                g_state = ST_WAKE;             /* through, and surfacing */
-                g_wake  = 0.0f;
+                audio_beep();                  /* the corridor is ahead */
             } else if (g_stage == 1) {
                 /* Gate one is the waterline. No interlude - you go in.
                    The plunge is a shove downward, a flash of foam, and the
@@ -1898,13 +1909,8 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
                 g_vx = 0.0f; g_vy = -6.5f; g_vz = -2.0f;
                 g_flash = 0.35f;
             } else {
-                /* the room comes up for a moment, and a little more of it
-                   holds together than it did at the last threshold */
-                g_state   = ST_SURFACE;
-                g_surf    = 0.0f;
-                g_clarity = 0.26f + 0.27f * (float)(g_stage - 1);
-                build_room();
-                upload_room(g_clarity);
+                /* gates two and three land as a shift in the world itself -
+                   the cutaway to the room read as a non sequitur and is gone */
                 audio_beep();
             }
         }
@@ -1912,6 +1918,14 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
     if (g_stage_flash > 0.0f) g_stage_flash -= dt * 0.55f;
     g_stagef += ((float)g_stage - g_stagef) * (1.0f - (float)exp(-dt * 1.6f));
     if (g_dive > 0.0f) g_dive -= dt * 0.8f;
+
+    /* the door at the end of the corridor */
+    if (-g_pz >= WAKE_Z - 1.6f && in->ping) {
+        g_state = ST_WAKE;
+        g_wake  = 0.0f;
+        audio_beep();
+        return;
+    }
 
     /* ping */
     if (in->ping && now >= g_ping_ready) {
@@ -1971,9 +1985,9 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
     {   /* the rock itself, once there is enough of the world to light */
         float sm = surface_mix(g_pz);
         if (sm > 0.004f) {
-            float bra[27], brb[27];
+            float bra[48], brb[48];
             int b;
-            for (b = 0; b < 9; b++) {
+            for (b = 0; b < 16; b++) {
                 bra[b*3+0] = g_br[b][0]; bra[b*3+1] = g_br[b][1]; bra[b*3+2] = g_br[b][2];
                 brb[b*3+0] = g_br[b][3]; brb[b*3+1] = g_br[b][4]; brb[b*3+2] = g_br[b][5];
             }
@@ -1987,14 +2001,17 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
             glUniform1f(c_wander, g_wander);
             glUniform1f(c_rough, g_rough);
             glUniform1f(c_time, now);
-            {   /* the light ahead also steps up at each gate */
-                float ls = smoothstep01(1.6f, 3.4f, g_stagef);
-                glUniform1f(c_light, sm > ls ? sm : ls * 0.85f);
+            {   /* Surfaces before the corridor are a sheen in the dark,
+                 * or sounding would stop meaning anything: the full light
+                 * belongs to stage four alone. */
+                float ls = smoothstep01(3.02f, 3.85f, g_stagef);
+                float dim = sm * 0.05f;   /* a sheen, not a reveal */
+                glUniform1f(c_light, dim > ls ? dim : ls);
             }
             glUniform1f(c_wet, g_wet ? 1.0f : 0.0f);
             glUniform1f(c_room, smoothstep01(GATE_3 + 8.0f, GATE_END - 4.0f, -g_pz));
-            glUniform3fv(c_bra, 9, bra);
-            glUniform3fv(c_brb, 9, brb);
+            glUniform3fv(c_bra, 16, bra);
+            glUniform3fv(c_brb, 16, brb);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
             glBindVertexArray(g_wvao_full);
             glDrawArrays(GL_TRIANGLES, 0, 3);
@@ -2050,7 +2067,8 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
 
     {   /* the readout */
         char left[40], right[40];
-        const char *hint = g_has_moved ? "" : "WASD TO MOVE";
+        const char *hint = (-g_pz >= WAKE_Z - 7.0f) ? "CLICK TO OPEN"
+                         : (g_has_moved ? "" : "WASD TO MOVE");
         sprintf(left, g_wet ? "STAGE %d   %5.1f M  SUBMERGED"
                             : "STAGE %d   %5.1f M", g_stage + 1,
                 -g_pz < 0.0f ? 0.0f : -g_pz);

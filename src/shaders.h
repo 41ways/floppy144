@@ -36,7 +36,7 @@ static const char *POINT_VS =
 /* What it leaves behind. Only surfaces get this: the wave crossing open
    air is visible as it passes and then is simply gone, so the map that
    accumulates is walls and nothing else. */
-"  float memory = (age > 0.0 ? 0.34 : 0.0) * uPersist;\n"
+"  float memory = (age > 0.0 ? 0.60 : 0.0) * uPersist;\n"
 /* a metre of free sight so the player never walks off a ledge blind */
 "  float close  = exp(-pow(d / 1.45, 2.0)) * 0.22 * uPersist;\n"
 /* uBase holds a thing lit whatever the wavefront is doing, so the title
@@ -70,7 +70,7 @@ static const char *POINT_FS =
 "  c = mix(c, vec3(1.00, 0.13, 0.07), uMonster);\n"
 "  float a = vBright * exp(-vDist * 0.055);\n"
 /* the rock under your nose is already known - let the distance read */
-"  a *= mix(0.52 + 0.48 * smoothstep(0.5, 4.0, vDist), 1.0, uFlat);\n"
+"  a *= mix(0.72 + 0.28 * smoothstep(0.5, 4.0, vDist), 1.0, uFlat);\n"
 "  a = mix(a, min(a * 2.2, 1.0), uMonster);\n"
 /* Waking floods the screen white, and light added to white is still
    white - so that one pass writes dark ink over it instead. */
@@ -208,8 +208,8 @@ static const char *CAVE_FS =
 "uniform float uWet;      // stage two shines\n"
 "uniform float uRoom;     // the rock squaring into somewhere built\n"
 "\n"
-"uniform vec3  uBrA[9];\n"
-"uniform vec3  uBrB[9];\n"
+"uniform vec3  uBrA[16];\n"
+"uniform vec3  uBrB[16];\n"
 "\n"
 "float h1(float n){ uint h = floatBitsToUint(n);\n"
 "  h ^= h >> 15; h *= 0x2c1b3c6du; h ^= h >> 12; h *= 0x297a2d39u; h ^= h >> 15;\n"
@@ -222,9 +222,9 @@ static const char *CAVE_FS =
 "vec2 centre(float z){ float w = uWander;\n"
 "  return vec2(sin(z*0.100+uSeed)*3.8*w + sin(z*0.400+uSeed*1.7)*1.4,\n"
 "              cos(z*0.070+uSeed*2.3)*2.4*w + sin(z*0.310+uSeed*3.1)*1.1); }\n"
-"float dk(float z){ return clamp(-z/120.0, 0.0, 1.0); }\n"
+"float dk(float z){ return clamp(-z/480.0, 0.0, 1.0); }\n"
 "float gate(float z){ float d = -z, best = 1e9, dz; int k = 0;\n"
-"  float G[4] = float[4](28.0, 58.0, 90.0, 120.0);\n"
+"  float G[4] = float[4](120.0, 240.0, 360.0, 480.0);\n"
 "  for (int i = 0; i < 4; i++){ float t = abs(d - G[i]);\n"
 "    if (t < best) { best = t; k = i; } }\n"
 "  if (best > 20.0) return 0.0;\n"
@@ -246,7 +246,8 @@ static const char *CAVE_FS =
 "  vec2 q = abs(vec2(p.x - c.x, p.y - c.y)) - vec2(2.30, 1.75);\n"
 "  float boxm = -max(q.x, q.y);\n"
 "  m = mix(m, boxm, uRoom);\n"
-"  int i0 = int(clamp(-p.z/34.0, 0.0, 7.0));\n"
+"  m = min(m, p.z + 497.0);\n"
+"  int i0 = int(clamp(-p.z/34.0, 0.0, 14.0));\n"
 "  m = max(m, 1.75 - segd(p, uBrA[i0],   uBrB[i0]));\n"
 "  m = max(m, 1.75 - segd(p, uBrA[i0+1], uBrB[i0+1]));\n"
 "  return m; }\n"
@@ -294,12 +295,18 @@ static const char *CAVE_FS =
 "  n = normalize(n - (gp - n*dot(gp,n)) * 1.6 * (1.0 - uRoom));\n"
 "\n"
 "  vec3 alb = mix(vec3(0.20,0.19,0.185), vec3(0.44,0.39,0.34), g0);\n"
+/* the last thing the corridor shows you: a door, darker than its wall */
+"  if (p.z < -495.9) {\n"
+"    vec2 dc = centre(p.z);\n"
+"    if (abs(p.x - dc.x) < 0.62 && p.y - dc.y < 0.75 && p.y - dc.y > -1.55)\n"
+"      alb = vec3(0.24, 0.20, 0.16);\n"
+"  }\n"
 "  alb = mix(alb, vec3(0.30,0.34,0.38), uWet*0.55);\n"
 /* built surfaces are pale and even; the grain fades with the rock */
 "  alb = mix(alb, vec3(0.78, 0.79, 0.81), uRoom * 0.85);\n"
 "\n"
 "  vec2 lc = centre(uCam.z - 20.0);\n"
-"  vec3 lp = vec3(lc.x, lc.y + 0.6, uCam.z - 20.0);\n"
+"  vec3 lp = vec3(lc.x, lc.y + 0.6, max(uCam.z - 20.0, -494.5));\n"
 "  vec3 ld = normalize(lp - p);\n"
 "  float dif = max(dot(n, ld), 0.0);\n"
 "  float sh  = shade_to(p, ld);\n"
@@ -307,7 +314,9 @@ static const char *CAVE_FS =
 "  float fre = pow(1.0 - max(dot(n, -rd), 0.0), 3.0);\n"
 "\n"
 "  vec3 warm = mix(vec3(1.00, 0.93, 0.82), vec3(0.97, 0.98, 1.00), uRoom);\n"
-"  vec3 col  = alb * (0.030 + 0.16*uLight) * ao;\n"
+/* No ambient floor: a surface no light reaches stays black, or the
+   sounding would stop being the way you see. The corridor doubles it. */
+"  vec3 col  = alb * uLight * (0.19 + 0.42*uRoom) * ao;\n"
 "  col += alb * warm * dif * sh * (0.18 + 0.62*uLight);\n"
 "  col += warm * fre * (0.02 + 0.14*uLight) * ao;\n"
 "  col += warm * pow(max(dot(reflect(-ld, n), -rd), 0.0), 34.0) * uWet * 0.65 * sh;\n"
