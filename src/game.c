@@ -54,11 +54,11 @@
  * rather than one that flattens two thirds of the way down, and each gate is
  * a chamber wide enough that the ping goes out and does not come back - which
  * is the only announcement the game makes. */
-#define DEPTH_FULL     200.0f  /* metres at which the cave is at its worst */
-#define GATE_1          45.0f
-#define GATE_2          95.0f
-#define GATE_3         150.0f
-#define GATE_END       200.0f
+#define DEPTH_FULL     120.0f  /* metres at which the cave is at its worst */
+#define GATE_1          28.0f
+#define GATE_2          58.0f
+#define GATE_3          90.0f
+#define GATE_END       120.0f
 #define GATE_R           9.5f  /* how wide a threshold chamber opens */
 #define GATE_W           5.0f  /* and how long it runs
  */
