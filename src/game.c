@@ -22,13 +22,13 @@
 /* --- tuning ------------------------------------------------------------- */
 
 #define MAX_POINTS   1200000   /* 19 MB of RAM, 0 bytes on disk */
-#define PING_RAYS       6000
+#define PING_RAYS        900   /* every one of them is a visible bullet */
 #define PING_BOUNCES       4   /* how many walls a wave survives */
 #define GRAZE_MIN      0.15f   /* below this the hit is a graze, not a bounce */
 #define MIN_SEGMENT    0.40f   /* a bounce that goes nowhere is a graze too */
-#define WAVE_POINTS    60000   /* the front in mid-air: shown, never kept */
-#define WAVE_EVERY        47   /* only every Nth ray is drawn in flight */
-#define WAVE_STEP      0.22f   /* dense enough that a tracer reads as a dash */
+#define WAVE_POINTS   170000   /* the bullets in flight: shown, never kept */
+#define EYE_HEIGHT     0.55f   /* the ping leaves from your feet, not your face */
+#define WAVE_STEP      0.26f   /* dense enough that a bullet reads as a dash */
 #define RAY_STEPS         96
 #define WAVE_SPEED     11.0f   /* metres per second the wavefront travels */
 #define MOVE_SPEED      2.7f
@@ -376,14 +376,21 @@ static void emit_ping(float now, const float *f, const float *r, const float *u)
     g_wcount = 0;          /* the previous wave has passed; nothing to keep */
 
     for (i = 0; i < PING_RAYS; i++) {
-        float k  = ((float)i + 0.5f) / (float)PING_RAYS;
+        /* The golden angle covers a cap evenly, but it covers it as a lattice,
+         * and a lattice printed onto a wall shows up as concentric rings - a
+         * machine's signature, not a cave's. Jittering each ray by about half
+         * the spacing keeps the coverage and destroys the pattern. */
+        float j1 = hash1((float)i * 1.37f + g_seed) - 0.5f;
+        float j2 = hash1((float)i * 2.91f + g_seed * 3.0f) - 0.5f;
+        float k  = ((float)i + 0.5f + j1) / (float)PING_RAYS;
         float ct = 1.0f - k * (1.0f - cosmax);            /* uniform on the cap */
         float st = (float)sqrt(1.0f - ct * ct);
-        float ph = 2.39996323f * (float)i;                /* golden angle */
+        float ph = 2.39996323f * (float)i + j2 * 1.7f;
         float lx = st * (float)cos(ph);
         float ly = st * (float)sin(ph);
 
-        float ox = g_px, oy = g_py, oz = g_pz;
+        /* it leaves from the ground you just stepped on */
+        float ox = g_px, oy = g_py - EYE_HEIGHT, oz = g_pz;
         float dx = r[0] * lx + u[0] * ly + f[0] * ct;
         float dy = r[1] * lx + u[1] * ly + f[1] * ct;
         float dz = r[2] * lx + u[2] * ly + f[2] * ct;
@@ -407,7 +414,7 @@ static void emit_ping(float now, const float *f, const float *r, const float *u)
              * separate tracers you can watch travel, strike and kick off.
              * The dense part of the ping is the map it leaves on the walls,
              * not the part you watch move. */
-            if ((i % WAVE_EVERY) == 0) {
+            {
                 float march;
                 for (march = WAVE_STEP; march < t; march += WAVE_STEP) {
                     if (g_wcount >= WAVE_POINTS) break;
@@ -415,7 +422,7 @@ static void emit_ping(float now, const float *f, const float *r, const float *u)
                     g_wpts[g_wcount].y = oy + dy * march;
                     g_wpts[g_wcount].z = oz + dz * march;
                     g_wpts[g_wcount].reveal = now + (travelled + march) / WAVE_SPEED;
-                    g_wpts[g_wcount].gain = gain * 0.95f;
+                    g_wpts[g_wcount].gain = gain * 1.00f;
                     g_wcount++;
                 }
             }
