@@ -1,9 +1,9 @@
 #include "gl33.h"
 
 /* one definition per entry point */
-#define GL_DEF(TYPE, RET, NAME, ARGS) TYPE##PROC NAME = 0;
-GL_FUNCS(GL_DEF)
-#undef GL_DEF
+#define GL33_DEF(TYPE, RET, NAME, ARGS) TYPE##PROC NAME = 0;
+GL_FUNCS(GL33_DEF)
+#undef GL33_DEF
 
 static HMODULE gl_dll;
 
@@ -24,11 +24,11 @@ int gl33_load(void)
 {
     int missing = 0;
 
-#define GL_LOAD(TYPE, RET, NAME, ARGS) \
+#define GL33_LOAD(TYPE, RET, NAME, ARGS) \
     NAME = (TYPE##PROC)gl_get(#NAME); \
     if (!NAME) missing++;
-    GL_FUNCS(GL_LOAD)
-#undef GL_LOAD
+    GL_FUNCS(GL33_LOAD)
+#undef GL33_LOAD
 
     return missing == 0;
 }

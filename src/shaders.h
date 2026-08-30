@@ -11,6 +11,7 @@ static const char *POINT_VS =
 "#version 330 core\n"
 "layout(location = 0) in vec3  aPos;\n"
 "layout(location = 1) in float aReveal;\n"
+"layout(location = 2) in float aGain;\n"
 "uniform mat4  uVP;\n"
 "uniform vec3  uCam;\n"
 "uniform float uTime;\n"
@@ -28,8 +29,8 @@ static const char *POINT_VS =
 "  float memory = age > 0.0 ? 0.30 : 0.0;\n"
 /* a metre of free sight so the player never walks off a ledge blind */
 "  float close  = exp(-pow(d / 1.45, 2.0)) * 0.40;\n"
-"  vBright = max(max(front, memory), close);\n"
-"  gl_PointSize = clamp(300.0 / max(clip.w, 0.25), 1.0, 6.0);\n"
+"  vBright = max(max(front, memory), close) * aGain;\n"
+"  gl_PointSize = clamp(90.0 / max(clip.w, 0.25), 1.0, 2.4);\n"
 "}\n";
 
 static const char *POINT_FS =

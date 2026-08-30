@@ -22,7 +22,8 @@
 /* --- tuning ------------------------------------------------------------- */
 
 #define MAX_POINTS   1200000   /* 19 MB of RAM, 0 bytes on disk */
-#define PING_RAYS      14000
+#define PING_RAYS       6000
+#define PING_BOUNCES       3   /* how many walls a wave survives */
 #define RAY_STEPS         96
 #define WAVE_SPEED     11.0f   /* metres per second the wavefront travels */
 #define MOVE_SPEED      2.7f
@@ -38,7 +39,7 @@
 
 /* --- point cloud -------------------------------------------------------- */
 
-typedef struct { float x, y, z, reveal; } Point;   /* 16 bytes */
+typedef struct { float x, y, z, reveal, gain; } Point;   /* 20 bytes */
 
 static Point *g_pts;
 static int    g_count;
@@ -150,6 +151,19 @@ static int cave_ray(float ox, float oy, float oz,
         t += (d * 0.55f > 0.035f) ? d * 0.55f : 0.035f;
     }
     return 0;
+}
+
+/* The field is positive inside the air, so its gradient points back into the
+ * cave - which is exactly the normal a wave needs to bounce off. */
+static void cave_normal(float x, float y, float z, float *n)
+{
+    const float e = 0.035f;
+    float nx = cave_sdf(x + e, y, z) - cave_sdf(x - e, y, z);
+    float ny = cave_sdf(x, y + e, z) - cave_sdf(x, y - e, z);
+    float nz = cave_sdf(x, y, z + e) - cave_sdf(x, y, z - e);
+    float l  = (float)sqrt(nx * nx + ny * ny + nz * nz);
+    if (l < 1e-6f) { n[0] = 0.0f; n[1] = 1.0f; n[2] = 0.0f; return; }
+    n[0] = nx / l; n[1] = ny / l; n[2] = nz / l;
 }
 
 /* --- the things ----------------------------------------------------------
@@ -297,6 +311,7 @@ static void mon_emit_points(const Monster *m, float now)
         g_mpts[i].y = m->y + r * (float)cos(b) * 1.3f;
         g_mpts[i].z = m->z + r * (float)sin(b) * (float)sin(a) * 0.9f;
         g_mpts[i].reveal = now;              /* always at the wavefront */
+        g_mpts[i].gain   = 1.0f;
     }
     glBindBuffer(GL_ARRAY_BUFFER, g_mvbo);
     glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)sizeof g_mpts, g_mpts);
@@ -345,33 +360,57 @@ static void mon_lit_by(const float *f, float reach, float now)
 
 static void emit_ping(float now, const float *f, const float *r, const float *u)
 {
-    int i;
+    int i, b;
     int start = g_count;
     int added = 0;
     float reach = ping_reach();
     float cosmax = (float)cos(CONE_HALF_ANGLE);
 
     for (i = 0; i < PING_RAYS; i++) {
-        float k     = ((float)i + 0.5f) / (float)PING_RAYS;
-        float ct    = 1.0f - k * (1.0f - cosmax);        /* uniform on the cap */
-        float st    = (float)sqrt(1.0f - ct * ct);
-        float ph    = 2.39996323f * (float)i;            /* golden angle */
-        float lx    = st * (float)cos(ph);
-        float ly    = st * (float)sin(ph);
-        float dx    = r[0] * lx + u[0] * ly + f[0] * ct;
-        float dy    = r[1] * lx + u[1] * ly + f[1] * ct;
-        float dz    = r[2] * lx + u[2] * ly + f[2] * ct;
-        float t;
+        float k  = ((float)i + 0.5f) / (float)PING_RAYS;
+        float ct = 1.0f - k * (1.0f - cosmax);            /* uniform on the cap */
+        float st = (float)sqrt(1.0f - ct * ct);
+        float ph = 2.39996323f * (float)i;                /* golden angle */
+        float lx = st * (float)cos(ph);
+        float ly = st * (float)sin(ph);
 
-        if (g_count >= MAX_POINTS) break;
-        if (!cave_ray(g_px, g_py, g_pz, dx, dy, dz, reach, &t)) continue;
+        float ox = g_px, oy = g_py, oz = g_pz;
+        float dx = r[0] * lx + u[0] * ly + f[0] * ct;
+        float dy = r[1] * lx + u[1] * ly + f[1] * ct;
+        float dz = r[2] * lx + u[2] * ly + f[2] * ct;
+        float travelled = 0.0f;
+        float gain = 1.0f;
 
-        g_pts[g_count].x = g_px + dx * t;
-        g_pts[g_count].y = g_py + dy * t;
-        g_pts[g_count].z = g_pz + dz * t;
-        g_pts[g_count].reveal = now + t / WAVE_SPEED;
-        g_count++;
-        added++;
+        /* Each ray keeps going after it lands. The distance it has covered so
+         * far decides when the front gets there, so a wave visibly rounds a
+         * corner instead of stopping dead at the first wall. */
+        for (b = 0; b < PING_BOUNCES; b++) {
+            float t, n[3], dot;
+
+            if (g_count >= MAX_POINTS) break;
+            if (!cave_ray(ox, oy, oz, dx, dy, dz, reach - travelled, &t)) break;
+
+            ox += dx * t; oy += dy * t; oz += dz * t;
+            travelled += t;
+
+            g_pts[g_count].x = ox;
+            g_pts[g_count].y = oy;
+            g_pts[g_count].z = oz;
+            g_pts[g_count].reveal = now + travelled / WAVE_SPEED;
+            g_pts[g_count].gain = gain;
+            g_count++;
+            added++;
+
+            if (travelled >= reach * 0.98f) break;
+
+            cave_normal(ox, oy, oz, n);
+            dot = dx * n[0] + dy * n[1] + dz * n[2];
+            dx -= 2.0f * dot * n[0];
+            dy -= 2.0f * dot * n[1];
+            dz -= 2.0f * dot * n[2];
+            ox += n[0] * 0.05f; oy += n[1] * 0.05f; oz += n[2] * 0.05f;
+            gain *= 0.55f;                    /* each bounce costs it energy */
+        }
     }
 
     if (added > 0) {
@@ -470,18 +509,24 @@ static void new_attempt(unsigned seed, float now)
  * the same wavefront as the walls. Two seconds of it teaches the whole game -
  * a click throws light, light reveals, revealed things linger. */
 
-static float g_title_pulse;
+static float  g_title_pulse;
+static float *g_text_xy;              /* heap, so it costs no file bytes */
+
+#define TEXT_MAX_PTS 30000
 
 static void title_line(const char *str, int px, float scale, float yoff,
                        float delay, float now)
 {
-    static float xy[9000];
     int n, i;
 
-    n = plat_text_points(str, px, xy, 4000);
+    if (!g_text_xy) return;
+    /* A 150 px word is well over four thousand lit pixels. Capping the scan
+     * low truncated it mid-glyph, and because the cut landed differently each
+     * time the title was rebuilt it read as the game restarting. */
+    n = plat_text_points(str, px, g_text_xy, TEXT_MAX_PTS);
     for (i = 0; i < n && g_count < MAX_POINTS; i++) {
-        float x = g_px + xy[i * 2 + 0] * scale;
-        float y = g_py - xy[i * 2 + 1] * scale + yoff;   /* bitmaps run down */
+        float x = g_px + g_text_xy[i * 2 + 0] * scale;
+        float y = g_py - g_text_xy[i * 2 + 1] * scale + yoff;   /* bitmaps run down */
         float z = g_pz - 5.0f;
         float dx = x - g_px, dy = y - g_py, dz = z - g_pz;
         float d  = (float)sqrt(dx * dx + dy * dy + dz * dz);
@@ -489,6 +534,7 @@ static void title_line(const char *str, int px, float scale, float yoff,
         g_pts[g_count].y = y;
         g_pts[g_count].z = z;
         g_pts[g_count].reveal = now + delay + d / WAVE_SPEED;
+        g_pts[g_count].gain   = 1.0f;
         g_count++;
     }
 }
@@ -503,7 +549,7 @@ static void enter_title(float now)
     glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
     glBufferSubData(GL_ARRAY_BUFFER, 0,
                     (GLsizeiptr)(g_count * (int)sizeof(Point)), g_pts);
-    g_title_pulse = now + 3.0f;      /* let the wave wash over it again */
+    g_title_pulse = now + 5.0f;      /* let the wave wash over it again */
 }
 
 /* --- setup -------------------------------------------------------------- */
@@ -519,11 +565,15 @@ static void setup_attribs(GLuint vao, GLuint vbo)
     glEnableVertexAttribArray(1);
     glVertexAttribPointer(1, 1, GL_FLOAT, GL_FALSE, sizeof(Point),
                           (void *)(3 * sizeof(float)));
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, sizeof(Point),
+                          (void *)(4 * sizeof(float)));
 }
 
 void game_init(unsigned seed)
 {
     g_pts = (Point *)malloc((size_t)MAX_POINTS * sizeof(Point));
+    g_text_xy = (float *)malloc((size_t)TEXT_MAX_PTS * 2 * sizeof(float));
     g_flash = 0.0f;
 
     g_prog    = gfx_build_program(POINT_VS, POINT_FS);

@@ -8,6 +8,7 @@
 #include <windows.h>
 #include <mmsystem.h>
 #include <math.h>
+#include <stdlib.h>
 #include "audio.h"
 
 #define SR           22050
@@ -36,7 +37,8 @@ static Voice    g_voices[MAX_VOICES];
 static unsigned g_rng = 0x1234567u;
 static int      g_ready;
 
-static float g_reva[REV_A], g_revb[REV_B];
+static float *g_reva, *g_revb;   /* heap: 60 KB of zeroes has no
+                                    business being in the exe */
 static int   g_ia, g_ib;
 
 static float frand(void)
@@ -130,6 +132,10 @@ void audio_init(void)
     wf.wBitsPerSample  = 16;
     wf.nBlockAlign     = (WORD)(wf.nChannels * wf.wBitsPerSample / 8);
     wf.nAvgBytesPerSec = wf.nSamplesPerSec * wf.nBlockAlign;
+
+    g_reva = (float *)calloc(REV_A, sizeof(float));
+    g_revb = (float *)calloc(REV_B, sizeof(float));
+    if (!g_reva || !g_revb) { g_ready = 0; return; }
 
     if (waveOutOpen(&g_wo, WAVE_MAPPER, &wf, 0, 0, CALLBACK_NULL) != MMSYSERR_NOERROR) {
         g_ready = 0;     /* no sound device: the game still plays, silently */

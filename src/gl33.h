@@ -77,11 +77,11 @@ typedef ptrdiff_t GLintptr;
   X(PFNGLUNIFORMMATRIX4FV,  void,    glUniformMatrix4fv,  (GLint, GLsizei, GLboolean, const GLfloat*))
 
 /* typedef + extern pointer for each */
-#define GL_DECL(TYPE, RET, NAME, ARGS) \
+#define GL33_DECL(TYPE, RET, NAME, ARGS) \
   typedef RET (APIENTRY *TYPE##PROC) ARGS; \
   extern TYPE##PROC NAME;
-GL_FUNCS(GL_DECL)
-#undef GL_DECL
+GL_FUNCS(GL33_DECL)
+#undef GL33_DECL
 
 /* Returns 1 on success, 0 if the driver is missing an entry point. */
 int gl33_load(void);
