@@ -25,7 +25,8 @@
 #define REV_C       12409
 #define AP_LEN       1051
 
-enum { V_PING, V_ROAR, V_ROAR_HI, V_ROAR_LO, V_HIT, V_BEEP, V_SPLASH, V_FLAT, V_HUM };
+enum { V_PING, V_ROAR, V_ROAR_HI, V_ROAR_LO, V_HIT, V_BEEP, V_SPLASH, V_FLAT, V_HUM,
+       V_STROKE };
 
 typedef struct {
     int   active;
@@ -94,6 +95,12 @@ static float voice_sample(Voice *v)
                 + (float)sin(6.2831853 * f * 1.004 * v->t)) * 0.5f;
         }
         s = s * att * 0.52f + frand() * (float)exp(-x * 22.0f) * 0.045f;
+    } else if (v->kind == V_STROKE) {
+        /* a swell of turbulence: noise through a resonance that rises and
+         * falls with the pull. The underwater lowpass does the rest. */
+        float sw  = (float)sin(3.1415927 * x);
+        float res = (float)sin(6.2831853 * (150.0 + 90.0 * sw) * v->t);
+        s = (frand() * 0.7f + res * 0.3f) * sw * sw * 0.34f;
     } else if (v->kind == V_HUM) {
         /* sixty-cycle light fixtures, forever */
         float env = (x < 0.10f ? x / 0.10f : (x > 0.9f ? (1.0f - x) / 0.1f : 1.0f));
@@ -253,6 +260,7 @@ void audio_roar(int type)
                 type == 2 ? 2.30f : 1.70f);
 }
 void audio_hum(void)  { voice_start(V_HUM, 24.0f); }
+void audio_stroke(void) { voice_start(V_STROKE, 0.62f); }
 void audio_hit(void)  { voice_start(V_HIT,  0.55f); }
 void audio_beep(void) { voice_start(V_BEEP, 0.42f); }
 

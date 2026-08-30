@@ -51,7 +51,8 @@
 #define WAVE_SPEED_WET 26.0f
 #define SWIM_DRAG      0.945f  /* what a stroke leaves behind */
 #define SWIM_LIFT      0.42f   /* and how it drifts up if you do nothing */
-#define MOTES          900     /* things suspended in it, lit only in passing */
+#define MOTES            900
+#define WATER_PTS        700   /* the surface itself, glinting before you jump */
 #define MOVE_SPEED      4.3f
 #define MOUSE_SENS      0.0022f
 #define PING_COOLDOWN   0.45f
@@ -138,6 +139,12 @@ static int   g_wet;              /* stage two: the passage is flooded */
 static float g_vx, g_vy, g_vz;   /* swimming carries momentum */
 static Point *g_motes;
 static GLuint g_movao, g_movbo;
+static Point *g_water;
+static GLuint g_wtvao, g_wtvbo;
+static float g_stroke_next;
+static Point *g_water;
+static GLuint g_wtvao, g_wtvbo;
+static float g_stroke_next;
 #ifdef DEMO_ENDING
 static float g_demo;      /* seconds of cave before the ending takes over */
 #endif
@@ -1294,6 +1301,31 @@ static void hud_build(const char *left, const char *right, const char *hint)
 /* Water is not empty, and that is most of what separates it from air. A few
  * hundred specks drift in it and light up only as the front goes past, so the
  * space between the walls stops being nothing. */
+/* The pool fills the first threshold chamber. You see it before you are in
+ * it: a sheet of glints rocking on the surface, drawn with a base glow so it
+ * needs no sounding - the first water in the game announces itself. */
+static void water_refresh(float now)
+{
+    int i;
+    float cx, cy;
+    tunnel_centre(-GATE_1, &cx, &cy);
+    for (i = 0; i < WATER_PTS; i++) {
+        float u = hash1((float)i * 1.31f) - 0.5f;
+        float v = hash1((float)i * 2.77f + 4.0f);
+        float x = cx + u * 17.0f;
+        float z = -GATE_1 + 3.0f - v * 16.0f;
+        float rip = (float)sin(x * 1.7f + now * 1.3f)
+                  + (float)sin(z * 2.3f - now * 0.9f);
+        g_water[i].x = x;
+        g_water[i].y = cy - 1.05f + rip * 0.055f;
+        g_water[i].z = z;
+        g_water[i].reveal = now - 1000.0f;      /* always lit, via uBase */
+        g_water[i].gain   = 0.35f + 0.30f * hash1((float)i * 5.3f + (float)((int)(now * 2.0f)));
+    }
+    glBindBuffer(GL_ARRAY_BUFFER, g_wtvbo);
+    glBufferSubData(GL_ARRAY_BUFFER, 0,
+                    (GLsizeiptr)(WATER_PTS * (int)sizeof(Point)), g_water);
+}
 static void motes_refresh(float now)
 {
     int i;
@@ -1447,6 +1479,8 @@ void game_init(unsigned seed, float start_depth)
     g_mpts    = (Point *)malloc((size_t)MON_POINTS * sizeof(Point));
     g_room    = (Point *)malloc((size_t)ROOM_MAX * sizeof(Point));
     g_motes   = (Point *)malloc((size_t)MOTES * sizeof(Point));
+    g_water   = (Point *)malloc((size_t)WATER_PTS * sizeof(Point));
+    g_water   = (Point *)malloc((size_t)WATER_PTS * sizeof(Point));
     g_flash = 0.0f;
 
     g_prog    = gfx_build_program(POINT_VS, POINT_FS);
@@ -1507,6 +1541,20 @@ void game_init(unsigned seed, float start_depth)
     glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)HUD_MAX * (GLsizeiptr)sizeof(Point),
                  0, GL_DYNAMIC_DRAW);
     setup_attribs(g_hvao, g_hvbo);
+
+    glGenVertexArrays(1, &g_wtvao);
+    glGenBuffers(1, &g_wtvbo);
+    glBindBuffer(GL_ARRAY_BUFFER, g_wtvbo);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)WATER_PTS * (GLsizeiptr)sizeof(Point),
+                 0, GL_DYNAMIC_DRAW);
+    setup_attribs(g_wtvao, g_wtvbo);
+
+    glGenVertexArrays(1, &g_wtvao);
+    glGenBuffers(1, &g_wtvbo);
+    glBindBuffer(GL_ARRAY_BUFFER, g_wtvbo);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)WATER_PTS * (GLsizeiptr)sizeof(Point),
+                 0, GL_DYNAMIC_DRAW);
+    setup_attribs(g_wtvao, g_wtvbo);
 
     glGenVertexArrays(1, &g_movao);
     glGenBuffers(1, &g_movbo);
@@ -1872,6 +1920,10 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
             float a = MOVE_SPEED * 3.4f * dt / len;
             g_vx += mx * a; g_vy += my * a; g_vz += mz * a;
             g_has_moved = 1;
+            if (now >= g_stroke_next) {   /* an arm pulling through it */
+                audio_stroke();
+                g_stroke_next = now + 0.78f + hash1(now * 7.0f) * 0.25f;
+            }
         }
         g_vy += SWIM_LIFT * dt;
         g_vx *= SWIM_DRAG; g_vy *= SWIM_DRAG; g_vz *= SWIM_DRAG;
@@ -1910,6 +1962,7 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
         }
     }
     if (g_wet) motes_refresh(now);
+    if (-g_pz > GATE_1 - 30.0f && -g_pz < GATE_1 + 24.0f) water_refresh(now);
 
     if (-g_pz > g_best_depth) g_best_depth = -g_pz;
 
@@ -2065,6 +2118,15 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
         glUniform1f(u_persist, 0.0f);
         glBindVertexArray(g_movao);
         glDrawArrays(GL_POINTS, 0, MOTES);
+    }
+
+    if (-g_pz > GATE_1 - 30.0f && -g_pz < GATE_1 + 24.0f) {
+        /* the pool, glinting on its own */
+        glUniform1f(u_persist, 0.0f);
+        glUniform1f(u_base, g_wet ? 0.10f : 0.30f);
+        glBindVertexArray(g_wtvao);
+        glDrawArrays(GL_POINTS, 0, WATER_PTS);
+        glUniform1f(u_base, 0.0f);
     }
 
     /* the wave itself, crossing open air. Visible only while the front is on
