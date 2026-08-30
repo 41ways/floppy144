@@ -42,7 +42,7 @@
 #define PING_CHUNK       400   /* rays traced per frame, so nothing stalls */
 #define RAY_STEPS         72
 #define WAVE_SPEED     11.0f   /* metres per second the wavefront travels */
-#define MOVE_SPEED      2.7f
+#define MOVE_SPEED      4.3f
 #define MOUSE_SENS      0.0022f
 #define PING_COOLDOWN   0.45f
 
@@ -54,9 +54,12 @@
 #define MAX_MON            4
 #define MON_KILL_DIST   1.05f
 #define WALL_HUG       0.34f   /* how far off the rock it rides */
-#define WEAVE_RATE      2.9f   /* how fast it swings side to side */
+#define WEAVE_RATE      1.8f   /* how fast it swings side to side */
 #define WEAVE_AMT      0.52f   /* and how far - too much and it circles instead of closing */
-#define GAIT_RATE       4.4f   /* leg cycles per metre travelled */
+#define STRIDE         0.44f   /* how far a foot drifts before it is picked up */
+#define SWING_TIME     0.11f   /* and how long the step through the air takes */
+#define DASH_ON        0.22f   /* it runs in bursts, not at a constant speed */
+#define DASH_OFF       0.15f
 #define MON_RANGE      16.0f   /* how far it will chase before it comes apart */
 #define BURST_TIME     0.55f   /* and how long it takes to scatter */
 
@@ -87,6 +90,7 @@ static float g_ping_ready;
 static float g_flash;
 static int   g_lives;
 static float g_best_depth;
+static float g_start_depth;
 static int   g_has_moved;
 
 /* --- cave shape, rerolled every attempt --------------------------------- */
@@ -269,12 +273,17 @@ typedef struct {
     float dx, dy, dz;          /* the way it is facing along the wall */
     float nx, ny, nz;          /* the rock it is clinging to */
     float wake;                /* absolute time the wavefront arrives */
-    float timer, seed, travel, gait;
+    float timer, seed, travel;
+    float foot[8][3], fa[8][3], fb[8][3], ft[8];  /* planted feet, and steps */
+    float dash;  int moving, group;
     float speed, warn, hear;   /* the archetype, as three numbers */
     float scale, legspan;      /* and how big a spider it is */
 } Monster;
 
 static Monster g_mon[MAX_MON];
+
+static void mon_feet(Monster *m, float dt, const float *f,
+                     const float *sd, const float *n);
 static int     g_mon_count;
 
 static void mon_make(Monster *m, int type, float k)
@@ -282,21 +291,21 @@ static void mon_make(Monster *m, int type, float k)
     m->type = type;
     switch (type) {
     case T_RUSHER:      /* the big one: little warning, fast, poor hearing */
-        m->speed   = 8.0f + 2.4f * k;
+        m->speed   = 5.4f + 1.6f * k;
         m->warn    = 0.42f - 0.12f * k;
         m->hear    = 19.0f;
         m->scale   = 1.15f;
         m->legspan = 1.00f;
         break;
     case T_LISTENER:    /* slow and generous, but hears you from far away */
-        m->speed   = 5.0f + 1.2f * k;
+        m->speed   = 3.5f + 0.8f * k;
         m->warn    = 0.72f;
         m->hear    = 32.0f + 8.0f * k;
         m->scale   = 0.80f;
         m->legspan = 2.10f;      /* a harvestman: mostly leg */
         break;
     default:            /* T_STALKER - the small one you learn the game on */
-        m->speed   = 6.6f + 2.2f * k;
+        m->speed   = 4.4f + 1.5f * k;
         m->warn    = 0.58f - 0.16f * k;
         m->hear    = 24.0f + 8.0f * k;
         m->scale   = 0.55f;
@@ -341,7 +350,18 @@ static void mon_place(Monster *m, float now)
     m->wake   = -1.0f;
     m->timer  = 0.0f;
     m->travel = 0.0f;
-    m->gait   = hash1(m->seed * 3.3f) * 6.2831853f;
+    m->dash   = 0.0f;
+    m->moving = 1;
+    m->group  = 0;
+    {   /* start with every foot already on the rock under it */
+        int q;
+        for (q = 0; q < 8; q++) {
+            m->foot[q][0] = m->x - n[0] * WALL_HUG;
+            m->foot[q][1] = m->y - n[1] * WALL_HUG;
+            m->foot[q][2] = m->z - n[2] * WALL_HUG;
+            m->ft[q] = 1.0f;
+        }
+    }
 
     /* deeper water is where the other kinds live */
     if (k > 0.62f)      mon_make(m, (rnd() & 1) ? T_RUSHER : T_LISTENER, k);
@@ -418,12 +438,22 @@ static int mon_step(Monster *m, float dt, float now)
         len = (float)sqrt(m->dx*m->dx + m->dy*m->dy + m->dz*m->dz);
         if (len > 1e-6f) { m->dx /= len; m->dy /= len; m->dz /= len; }
 
-        step = m->speed * dt;
+        /* Nothing with eight legs moves at a constant speed. It goes in
+         * bursts with a beat of stillness between them, which is most of
+         * what makes an insect look like an insect. */
+        m->dash -= dt;
+        if (m->dash <= 0.0f) {
+            m->moving = !m->moving;
+            m->dash = m->moving
+                    ? DASH_ON  + hash1(now * 13.0f + m->seed) * 0.20f
+                    : DASH_OFF + hash1(now * 17.0f + m->seed) * 0.16f;
+        }
+
+        step = m->moving ? m->speed * 1.75f * dt : 0.0f;
         m->x += m->dx * step;
         m->y += m->dy * step;
         m->z += m->dz * step;
         m->travel += step;
-        m->gait   += step * GAIT_RATE;
 
         /* hold on: keep a fixed distance off the rock as the wall curves */
         cave_normal(m->x, m->y, m->z, n);
@@ -432,6 +462,19 @@ static int mon_step(Monster *m, float dt, float now)
         m->y += n[1] * (WALL_HUG - sd);
         m->z += n[2] * (WALL_HUG - sd);
         m->nx = n[0]; m->ny = n[1]; m->nz = n[2];
+
+        {   /* let the legs catch up to wherever the body ended up */
+            float bf[3], bs[3], dot2, l2;
+            bf[0] = m->dx; bf[1] = m->dy; bf[2] = m->dz;
+            dot2 = bf[0]*n[0] + bf[1]*n[1] + bf[2]*n[2];
+            bf[0] -= dot2*n[0]; bf[1] -= dot2*n[1]; bf[2] -= dot2*n[2];
+            l2 = (float)sqrt(bf[0]*bf[0] + bf[1]*bf[1] + bf[2]*bf[2]);
+            if (l2 > 1e-4f) { bf[0]/=l2; bf[1]/=l2; bf[2]/=l2; }
+            bs[0] = n[1]*bf[2] - n[2]*bf[1];
+            bs[1] = n[2]*bf[0] - n[0]*bf[2];
+            bs[2] = n[0]*bf[1] - n[1]*bf[0];
+            mon_feet(m, dt, bf, bs, n);
+        }
 
         m->timer -= dt;
         dx = g_px - m->x; dy = g_py - m->y; dz = g_pz - m->z;
@@ -466,6 +509,67 @@ static int mon_visible(const Monster *m)
         || m->state == MON_BURST;
 }
 
+/* Where a foot wants to be: out to the side of the body and down against the
+ * rock. The body already rides WALL_HUG off the surface, so dropping that far
+ * along the inward normal lands on it without another field lookup. */
+static void foot_target(const Monster *m, int i,
+                        const float *f, const float *sd, const float *n, float *out)
+{
+    float side  = (i & 1) ? 1.0f : -1.0f;
+    int   pair  = i >> 1;
+    float along = (-0.34f + 0.24f * (float)pair) * m->scale;
+    float reach = (0.60f + 0.16f * (float)pair) * m->scale * m->legspan;
+    out[0] = m->x + f[0]*along + sd[0]*side*reach - n[0]*WALL_HUG;
+    out[1] = m->y + f[1]*along + sd[1]*side*reach - n[1]*WALL_HUG;
+    out[2] = m->z + f[2]*along + sd[2]*side*reach - n[2]*WALL_HUG;
+}
+
+/* The gait. Feet are held in world space and simply stay where they were put;
+ * a leg is only lifted once the body has dragged it further than a stride
+ * from where it should be, and then only if its half of the animal is the
+ * half currently allowed to move. Four down, four stepping, alternating -
+ * which is what an eight-legged thing actually does, and the reason it reads
+ * as walking rather than sliding. */
+static void mon_feet(Monster *m, float dt, const float *f, const float *sd, const float *n)
+{
+    int i, swinging = 0;
+    float want[3];
+
+    for (i = 0; i < 8; i++) if (m->ft[i] < 1.0f) swinging++;
+    if (!swinging) m->group ^= 1;          /* the other four may go now */
+
+    for (i = 0; i < 8; i++) {
+        int mine = ((i == 0 || i == 3 || i == 4 || i == 7) ? 0 : 1) == m->group;
+        foot_target(m, i, f, sd, n, want);
+
+        if (m->ft[i] < 1.0f) {             /* mid-step */
+            float u, e, lift;
+            m->ft[i] += dt / SWING_TIME;
+            if (m->ft[i] > 1.0f) m->ft[i] = 1.0f;
+            u = m->ft[i];
+            e = u * u * (3.0f - 2.0f * u);
+            lift = (float)sin(3.1415927f * u) * 0.30f * m->scale;
+            m->foot[i][0] = m->fa[i][0] + (m->fb[i][0] - m->fa[i][0]) * e + n[0] * lift;
+            m->foot[i][1] = m->fa[i][1] + (m->fb[i][1] - m->fa[i][1]) * e + n[1] * lift;
+            m->foot[i][2] = m->fa[i][2] + (m->fb[i][2] - m->fa[i][2]) * e + n[2] * lift;
+        } else if (mine) {                 /* planted: pick it up if it lags */
+            float dx = want[0] - m->foot[i][0];
+            float dy = want[1] - m->foot[i][1];
+            float dz = want[2] - m->foot[i][2];
+            float st = STRIDE * m->scale;
+            if (dx*dx + dy*dy + dz*dz > st * st) {
+                int k;
+                for (k = 0; k < 3; k++) m->fa[i][k] = m->foot[i][k];
+                /* overshoot slightly, the way a stepping leg reaches ahead */
+                m->fb[i][0] = want[0] + dx * 0.45f;
+                m->fb[i][1] = want[1] + dy * 0.45f;
+                m->fb[i][2] = want[2] + dz * 0.45f;
+                m->ft[i] = 0.0f;
+            }
+        }
+    }
+}
+
 /* A spider, built out of returns.
  *
  * Eight legs on a body that rides the rock: the normal is up, the way it is
@@ -478,7 +582,7 @@ static int mon_visible(const Monster *m)
 static void mon_emit_points(const Monster *m, float now)
 {
     float n[3], f[3], sd[3], len;
-    float sc = m->scale, sp = m->legspan;
+    float sc = m->scale;
     int i, k, w = 0;
 
     n[0] = m->nx; n[1] = m->ny; n[2] = m->nz;
@@ -513,27 +617,19 @@ static void mon_emit_points(const Monster *m, float now)
             r*(float)cos(b) * 0.8f, 1.0f);
     }
 
-    /* eight legs, alternating in two sets the way a real one walks */
+    /* Eight legs drawn to wherever their feet are actually standing. The
+     * knee rides high above the midpoint, so a leg whose foot has been left
+     * behind visibly stretches and then snaps forward when it steps. */
     for (i = 0; i < 8; i++) {
-        float side  = (i & 1) ? 1.0f : -1.0f;
-        int   pair  = i >> 1;
-        float along = (-0.30f + 0.22f * (float)pair) * sc;
-        float reach = (0.54f + 0.14f * (float)pair) * sc * sp;
-        float ph    = m->gait + ((i & 1) ? 3.1415927f : 0.0f) + (float)pair * 0.55f;
-        float lift  = (float)sin(ph); lift = lift > 0.0f ? lift * 0.30f * sc : 0.0f;
-        float swing = (float)cos(ph) * 0.26f * sc;
+        float wx = m->foot[i][0] - m->x;
+        float wy = m->foot[i][1] - m->y;
+        float wz = m->foot[i][2] - m->z;
+        /* into the body frame */
+        float ex = wx*f[0] + wy*f[1] + wz*f[2];
+        float ey = wx*sd[0] + wy*sd[1] + wz*sd[2];
+        float ez = wx*n[0] + wy*n[1] + wz*n[2];
+        float kx = ex * 0.42f, ky = ey * 0.46f, kz = 0.88f * sc;
 
-        /* Two straight segments read as wire spokes. One quadratic with the
-         * knee as its control point gives the high arched limb that says
-         * spider before anything else does - the body slung low under a tent
-         * of legs. */
-        float kx = along + swing * 0.40f, ky = side * reach * 0.46f, kz = 0.86f * sc;
-        float ex = along + swing,         ey = side * reach,          ez = -0.34f * sc + lift;
-
-        /* A single line of points along the curve reads as wire. Scattering a
-         * few around it at every sample gives the limb a thickness that
-         * tapers from a heavy haunch down to a fine tip - which is what makes
-         * it look like something that could carry the body. */
         for (k = 0; k < 46; k++) {
             float u   = (float)k / 45.0f;
             float iu  = 1.0f - u;
@@ -873,8 +969,8 @@ static void respawn(float now)
      * it. Spawning at 0,0,0 therefore buried the player inside rock, where
      * every ping ray hit a wall 6 cm away and the screen filled with a ball
      * of yellow returns. Start on the axis instead. */
-    tunnel_centre(0.0f, &cx, &cy);
-    g_px = cx; g_py = cy; g_pz = 0.0f;
+    tunnel_centre(-g_start_depth, &cx, &cy);
+    g_px = cx; g_py = cy; g_pz = -g_start_depth;
     g_yaw = 0.0f; g_pitch = 0.0f;
     g_ping_ready = now + 0.6f;
     g_mon_count = mon_target_count();
@@ -1012,7 +1108,7 @@ static void setup_attribs(GLuint vao, GLuint vbo)
                           (void *)(4 * sizeof(float)));
 }
 
-void game_init(unsigned seed)
+void game_init(unsigned seed, float start_depth)
 {
     g_pts = (Point *)malloc((size_t)MAX_POINTS * sizeof(Point));
     g_text_xy = (float *)malloc((size_t)TEXT_MAX_PTS * 2 * sizeof(float));
@@ -1066,6 +1162,7 @@ void game_init(unsigned seed)
     glBlendFunc(GL_ONE, GL_ONE);          /* light adds up, like real returns */
     glDisable(GL_DEPTH_TEST);             /* additive, so order does not matter */
 
+    g_start_depth = start_depth;
     new_attempt(seed, 0.0f);
     enter_title(0.0f);
 }
@@ -1259,7 +1356,7 @@ void game_debug_spider(float now, int type)
     cave_normal(m->x, m->y, m->z, n);
     m->nx = n[0]; m->ny = n[1]; m->nz = n[2];
     m->dx = 0.0f; m->dy = 0.0f; m->dz = 1.0f;
-    m->travel = 0.0f; m->gait = 1.1f;
+    m->travel = 0.0f; m->dash = 0.0f; m->moving = 1;
     mon_make(m, type, 0.3f);
     m->state = MON_CHARGING;
     m->timer = 30.0f;

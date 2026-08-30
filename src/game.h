@@ -10,7 +10,9 @@ typedef struct {
 } GameInput;
 
 /* seed picks the cave; pass anything unpredictable */
-void game_init(unsigned seed);
+/* start_depth drops you straight into a later stretch of the cave, so a
+   stage can be tested without playing the ones before it */
+void game_init(unsigned seed, float start_depth);
 void game_frame(const GameInput *in, float dt, float now, int width, int height);
 
 /* for the window title, so the prototype can be judged without a HUD */

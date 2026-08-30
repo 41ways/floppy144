@@ -15,6 +15,10 @@
 #define APP_TITLE   "SOUNDING"
 #define APP_CLASS   "sounding_window"
 #define BOOT_CLASS  "sounding_boot"
+#ifndef START_DEPTH
+#define START_DEPTH 0.0f   /* -DSTART_DEPTH=40 builds a stage-2 test exe */
+#endif
+
 #define WIN_W       1280
 #define WIN_H       720
 
@@ -296,6 +300,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     float  title_timer = 0.0f;
     /* -shot <file> <frame> [pingframe]: run a scripted session, save, quit */
     char   shot_path[260]; int shot_at = 0, shot_ping = 3, frame = 0, shot_spider = -1;
+    float  start_depth = START_DEPTH;
     shot_path[0] = 0;
 
     const int pf_attribs[] = {
@@ -317,6 +322,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     };
 
     (void)prev; (void)show;
+
+    if (cmd && strstr(cmd, "-depth")) sscanf(strstr(cmd, "-depth") + 6, "%f", &start_depth);
 
     if (cmd && strstr(cmd, "-shot")) {
         char *p = strstr(cmd, "-shot") + 5;
@@ -387,7 +394,11 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 
     audio_init();
     QueryPerformanceCounter(&start);
-    game_init((unsigned)(start.QuadPart ^ (start.QuadPart >> 32)));
+    /* a capture is only worth comparing against another capture if both
+       ran in the same cave, so -shot pins the seed */
+    game_init(shot_path[0] ? 20260904u
+                           : (unsigned)(start.QuadPart ^ (start.QuadPart >> 32)),
+              start_depth);
 
     ShowWindow(hwnd, SW_SHOW);
     glViewport(0, 0, g_width, g_height);
@@ -411,6 +422,11 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
         now = (float)((double)(now_t.QuadPart - start.QuadPart)  / (double)freq.QuadPart);
         prev_t = now_t;
         if (dt > 0.1f) dt = 0.1f;          /* never let a stall teleport you */
+
+        /* A capture is only comparable with another capture if both advanced
+         * the simulation by the same amount, so -shot runs on a fixed step
+         * rather than on whatever the machine managed that frame. */
+        if (shot_path[0]) { dt = 1.0f / 60.0f; now = (float)frame / 60.0f; }
 
         in.fwd   = g_captured && (GetAsyncKeyState('W') & 0x8000) ? 1 : 0;
         in.back  = g_captured && (GetAsyncKeyState('S') & 0x8000) ? 1 : 0;
