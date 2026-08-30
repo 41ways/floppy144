@@ -16,24 +16,28 @@ static const char *POINT_VS =
 "uniform vec3  uCam;\n"
 "uniform float uTime;\n"
 "uniform float uPersist;\n"
+"uniform float uFlat;\n"
 "out float vBright;\n"
 "out float vDist;\n"
 "void main(){\n"
 "  vec4 clip = uVP * vec4(aPos, 1.0);\n"
+/* the readout is made of the same points as the cave, only pinned to
+   the screen instead of standing in it */
+"  clip = mix(clip, vec4(aPos.xy, 0.0, 1.0), uFlat);\n"
 "  gl_Position = clip;\n"
 "  float d = distance(aPos, uCam);\n"
-"  vDist = d;\n"
+"  vDist = mix(d, 3.0, uFlat);\n"
 "  float age = uTime - aReveal;\n"
 /* the wavefront itself: a thin bright shell */
 "  float front  = exp(-pow(age / 0.13, 2.0));\n"
 /* What it leaves behind. Only surfaces get this: the wave crossing open
    air is visible as it passes and then is simply gone, so the map that
    accumulates is walls and nothing else. */
-"  float memory = (age > 0.0 ? 0.30 : 0.0) * uPersist;\n"
+"  float memory = (age > 0.0 ? 0.17 : 0.0) * uPersist;\n"
 /* a metre of free sight so the player never walks off a ledge blind */
-"  float close  = exp(-pow(d / 1.45, 2.0)) * 0.40 * uPersist;\n"
-"  vBright = max(max(front, memory), close) * aGain;\n"
-"  gl_PointSize = clamp(190.0 / max(clip.w, 0.25), 1.7, 4.6);\n"
+"  float close  = exp(-pow(d / 1.45, 2.0)) * 0.22 * uPersist;\n"
+"  vBright = mix(max(max(front, memory), close), 1.0, uFlat) * aGain;\n"
+"  gl_PointSize = mix(clamp(190.0 / max(clip.w, 0.25), 1.7, 4.6), 2.0, uFlat);\n"
 "}\n";
 
 static const char *POINT_FS =
@@ -41,6 +45,7 @@ static const char *POINT_FS =
 "in float vBright;\n"
 "in float vDist;\n"
 "uniform float uMonster;\n"
+"uniform float uFlat;\n"
 "out vec4 FragColor;\n"
 "void main(){\n"
 "  if (vBright < 0.02) discard;\n"
@@ -53,6 +58,8 @@ static const char *POINT_FS =
 /* the thing does not scatter like rock - it comes back red, and brighter */
 "  c = mix(c, vec3(1.00, 0.13, 0.07), uMonster);\n"
 "  float a = vBright * exp(-vDist * 0.055);\n"
+/* the rock under your nose is already known - let the distance read */
+"  a *= mix(0.35 + 0.65 * smoothstep(0.5, 4.0, vDist), 1.0, uFlat);\n"
 "  a = mix(a, min(a * 2.2, 1.0), uMonster);\n"
 "  FragColor = vec4(c * a, 1.0);\n"
 "}\n";

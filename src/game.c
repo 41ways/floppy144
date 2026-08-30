@@ -18,6 +18,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 /* --- tuning ------------------------------------------------------------- */
 
@@ -26,6 +27,8 @@
 #define PING_BOUNCES      10   /* it dies of exhaustion, not of a counter */
 #define MAX_TRAVEL     52.0f   /* hard stop, but energy gets there first */
 #define GAIN_BOUNCE    0.74f   /* what a wall costs it */
+#define MARK_SPLASH        5   /* marks left per impact - density makes surfaces */
+#define SPLASH_R       0.19f   /* how far they scatter across the rock */
 #define VERT_SPREAD    0.34f   /* the spray is much wider than it is tall */
 #define VERT_DAMP      0.50f   /* and a ricochet is pulled hard back toward level */
 #define GAIN_PER_METRE 0.028f  /* what the air costs it */
@@ -33,7 +36,8 @@
 #define GRAZE_MIN      0.15f   /* below this the hit is a graze, not a bounce */
 #define MIN_SEGMENT    0.40f   /* a bounce that goes nowhere is a graze too */
 #define WAVE_POINTS   230000   /* the bullets in flight: shown, never kept */
-#define EYE_HEIGHT     0.55f   /* the ping leaves from your feet, not your face */
+#define MUZZLE_DROP    0.12f   /* barely below the eye - see MUZZLE_FWD */
+#define MUZZLE_FWD     0.35f   /* and a step ahead, so they fly away from you */
 #define WAVE_STEP      0.32f   /* dense enough that a bullet reads as a dash */
 #define PING_CHUNK       400   /* rays traced per frame, so nothing stalls */
 #define RAY_STEPS         72
@@ -57,8 +61,8 @@ static Point *g_pts;
 static int    g_count;
 static Point *g_wpts;          /* the wave in flight, a ring that nobody reads back */
 static int    g_wcount;
-static GLuint g_vao, g_vbo, g_wvao, g_wvbo, g_mvao, g_mvbo, g_prog;
-static GLint  u_vp, u_cam, u_time, u_monster, u_persist;
+static GLuint g_vao, g_vbo, g_wvao, g_wvbo, g_mvao, g_mvbo, g_hvao, g_hvbo, g_prog;
+static GLint  u_vp, u_cam, u_time, u_monster, u_persist, u_flat;
 static Point  g_mpts[MON_POINTS];
 
 /* --- state -------------------------------------------------------------- */
@@ -76,6 +80,7 @@ static float g_ping_ready;
 static float g_flash;
 static int   g_lives;
 static float g_best_depth;
+static int   g_has_moved;
 
 /* --- cave shape, rerolled every attempt --------------------------------- */
 
@@ -253,9 +258,12 @@ static void mon_place(Monster *m, float now)
 }
 
 /* how many of them are awake in the cave at this depth */
+#define SAFE_DEPTH 14.0f       /* nothing hunts you while you learn to listen */
+
 static int mon_target_count(void)
 {
     float k = depth_k(g_pz);
+    if (-g_pz < SAFE_DEPTH) return 0;
     if (k > 0.72f) return 4;
     if (k > 0.46f) return 3;
     if (k > 0.20f) return 2;
@@ -399,9 +407,13 @@ static void ping_begin(float now, const float *f, const float *r, const float *u
 {
     int j;
     for (j = 0; j < 3; j++) { g_pf[j] = f[j]; g_pr[j] = r[j]; g_pu[j] = u[j]; }
-    g_ping_ox = g_px;
-    g_ping_oy = g_py - EYE_HEIGHT;      /* it leaves from the ground you stepped on */
-    g_ping_oz = g_pz;
+    /* Firing from foot height made the volley appear to climb up out of the
+     * floor. It leaves from just in front of the chest instead, and a little
+     * ahead, so what you see is bullets going away rather than rising past
+     * you. */
+    g_ping_ox = g_px + f[0] * MUZZLE_FWD;
+    g_ping_oy = g_py + f[1] * MUZZLE_FWD - MUZZLE_DROP;
+    g_ping_oz = g_pz + f[2] * MUZZLE_FWD;
     g_ping_t0 = now;
     g_ping_i  = 0;
     g_ping_busy = 1;
@@ -484,22 +496,44 @@ static void ping_work(void)
             ox += dx * t; oy += dy * t; oz += dz * t;
             travelled += t;
 
-            g_pts[g_count].x = ox;
-            g_pts[g_count].y = oy;
-            g_pts[g_count].z = oz;
-            g_pts[g_count].reveal = g_ping_t0 + travelled / WAVE_SPEED;
-            /* The mark a bullet leaves keeps more of itself than the bullet
-             * does. A tired ricochet still tells you a wall is there, and the
-             * cave only takes shape if the late hits stay readable. */
-            g_pts[g_count].gain = 0.42f + 0.58f * gain;
-            g_count++;
-            added++;
+            /* One point per impact left the walls looking like floating dust:
+             * isolated specks never resolve into a surface no matter how many
+             * you accumulate. A small splash across the rock at each hit costs
+             * no extra ray marching and is what turns marks into geometry. */
+            cave_normal(ox, oy, oz, n);
+            {
+                float t1[3], t2[3], inv;
+                int m;
+                /* any two directions across the face */
+                if (n[1] * n[1] < 0.9f) { t1[0] = -n[2]; t1[1] = 0.0f; t1[2] = n[0]; }
+                else                    { t1[0] = 1.0f;  t1[1] = 0.0f; t1[2] = 0.0f; }
+                inv = 1.0f / (float)sqrt(t1[0]*t1[0] + t1[1]*t1[1] + t1[2]*t1[2]);
+                t1[0] *= inv; t1[1] *= inv; t1[2] *= inv;
+                t2[0] = n[1]*t1[2] - n[2]*t1[1];
+                t2[1] = n[2]*t1[0] - n[0]*t1[2];
+                t2[2] = n[0]*t1[1] - n[1]*t1[0];
+
+                for (m = 0; m < MARK_SPLASH && g_count < MAX_POINTS; m++) {
+                    float a = (hash1((float)i * 3.7f + (float)b * 11.0f + (float)m * 2.3f) - 0.5f) * 2.0f * SPLASH_R;
+                    float c = (hash1((float)i * 5.1f + (float)b * 7.0f  + (float)m * 3.9f) - 0.5f) * 2.0f * SPLASH_R;
+                    if (m == 0) { a = 0.0f; c = 0.0f; }      /* one dead on the hit */
+                    g_pts[g_count].x = ox + t1[0]*a + t2[0]*c;
+                    g_pts[g_count].y = oy + t1[1]*a + t2[1]*c;
+                    g_pts[g_count].z = oz + t1[2]*a + t2[2]*c;
+                    g_pts[g_count].reveal = g_ping_t0 + travelled / WAVE_SPEED;
+                    /* The mark keeps more of itself than the bullet does: a
+                     * tired ricochet still proves a wall is there, and the
+                     * cave only takes shape if late hits stay readable. */
+                    g_pts[g_count].gain = 0.42f + 0.58f * gain;
+                    g_count++;
+                    added++;
+                }
+            }
 
             /* the air wears it down as it goes */
             gain *= (float)exp(-GAIN_PER_METRE * t);
             if (gain < GAIN_FLOOR || travelled >= MAX_TRAVEL * 0.98f) break;
 
-            cave_normal(ox, oy, oz, n);
             dot = dx * n[0] + dy * n[1] + dz * n[2];   /* negative going in */
 
             /* A tunnel is long and the beam points down it, so most rays meet
@@ -626,6 +660,7 @@ static void new_attempt(unsigned seed, float now)
     g_count  = 0;
     g_lives  = START_LIVES;
     g_best_depth = 0.0f;
+    g_has_moved = 0;
     respawn(now);
 }
 
@@ -653,12 +688,13 @@ static void title_line(const char *str, int px, float scale, float yoff,
         float x = g_px + g_text_xy[i * 2 + 0] * scale;
         float y = g_py - g_text_xy[i * 2 + 1] * scale + yoff;   /* bitmaps run down */
         float z = g_pz - 5.0f;
-        float dx = x - g_px, dy = y - g_py, dz = z - g_pz;
-        float d  = (float)sqrt(dx * dx + dy * dy + dz * dz);
+        /* Not a wavefront here: the letters come up left to right, the way a
+         * monitor lights its display when someone switches it on. */
+        float sweep = (g_text_xy[i * 2 + 0] + 2.0f) * 0.155f;
         g_pts[g_count].x = x;
         g_pts[g_count].y = y;
         g_pts[g_count].z = z;
-        g_pts[g_count].reveal = now + delay + d / WAVE_SPEED;
+        g_pts[g_count].reveal = now + delay + sweep;
         g_pts[g_count].gain   = 1.0f;
         g_count++;
     }
@@ -669,12 +705,59 @@ static void enter_title(float now)
     g_state = ST_TITLE;
     g_count = 0;
     title_line("SOUNDING",       150, 2.05f, 0.55f, 0.30f, now);
-    title_line("WASD TO MOVE",    40, 2.05f, -1.15f, 1.10f, now);
+    title_line("CLICK TO START",  40, 2.05f, -1.15f, 1.35f, now);
 
     glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
     glBufferSubData(GL_ARRAY_BUFFER, 0,
                     (GLsizeiptr)(g_count * (int)sizeof(Point)), g_pts);
-    g_title_pulse = now + 5.0f;      /* let the wave wash over it again */
+    g_title_pulse = now + 3.6f;      /* let the wave wash over it again */
+}
+
+/* --- the readout --------------------------------------------------------
+ * A patient monitor, not a game HUD: it is the same point cloud as the cave,
+ * pinned to the screen. Rebuilt only when the text it shows actually changes,
+ * so GDI is touched a few times a second at worst. */
+
+#define HUD_MAX 9000
+
+static Point *g_hud;
+static int    g_hud_n;
+static char   g_hud_cache[96];
+
+/* x,y in normalised device coordinates; scale is height in NDC */
+static void hud_line(const char *str, float scale, float cx, float cy, float bright)
+{
+    int n, i;
+    if (!g_text_xy) return;
+    n = plat_text_points(str, 96, g_text_xy, TEXT_MAX_PTS);
+    for (i = 0; i < n && g_hud_n < HUD_MAX; i++) {
+        g_hud[g_hud_n].x = cx + g_text_xy[i * 2 + 0] * scale;
+        g_hud[g_hud_n].y = cy - g_text_xy[i * 2 + 1] * scale * 1.78f;
+        g_hud[g_hud_n].z = 0.0f;
+        g_hud[g_hud_n].reveal = 0.0f;
+        g_hud[g_hud_n].gain = bright;
+        g_hud_n++;
+    }
+}
+
+static void hud_build(const char *left, const char *right, const char *hint)
+{
+    char key[96];
+    sprintf(key, "%.28s|%.28s|%.30s", left, right, hint);
+    if (strcmp(key, g_hud_cache) == 0) return;      /* nothing moved */
+    strncpy(g_hud_cache, key, sizeof g_hud_cache - 1);
+    g_hud_cache[sizeof g_hud_cache - 1] = 0;
+
+    g_hud_n = 0;
+    if (left[0])  hud_line(left,  0.055f, -0.74f,  0.90f, 0.62f);
+    if (right[0]) hud_line(right, 0.055f,  0.74f,  0.90f, 0.62f);
+    if (hint[0])  hud_line(hint,  0.048f,  0.00f, -0.72f, 0.50f);
+
+    if (g_hud_n > 0) {
+        glBindBuffer(GL_ARRAY_BUFFER, g_hvbo);
+        glBufferSubData(GL_ARRAY_BUFFER, 0,
+                        (GLsizeiptr)(g_hud_n * (int)sizeof(Point)), g_hud);
+    }
 }
 
 /* --- setup -------------------------------------------------------------- */
@@ -700,6 +783,7 @@ void game_init(unsigned seed)
     g_pts = (Point *)malloc((size_t)MAX_POINTS * sizeof(Point));
     g_text_xy = (float *)malloc((size_t)TEXT_MAX_PTS * 2 * sizeof(float));
     g_wpts    = (Point *)malloc((size_t)WAVE_POINTS * sizeof(Point));
+    g_hud     = (Point *)malloc((size_t)HUD_MAX * sizeof(Point));
     g_flash = 0.0f;
 
     g_prog    = gfx_build_program(POINT_VS, POINT_FS);
@@ -708,6 +792,7 @@ void game_init(unsigned seed)
     u_time    = glGetUniformLocation(g_prog, "uTime");
     u_monster = glGetUniformLocation(g_prog, "uMonster");
     u_persist = glGetUniformLocation(g_prog, "uPersist");
+    u_flat    = glGetUniformLocation(g_prog, "uFlat");
 
     glGenVertexArrays(1, &g_vao);
     glGenBuffers(1, &g_vbo);
@@ -724,6 +809,13 @@ void game_init(unsigned seed)
                  (GLsizeiptr)WAVE_POINTS * (GLsizeiptr)sizeof(Point),
                  0, GL_DYNAMIC_DRAW);
     setup_attribs(g_wvao, g_wvbo);
+
+    glGenVertexArrays(1, &g_hvao);
+    glGenBuffers(1, &g_hvbo);
+    glBindBuffer(GL_ARRAY_BUFFER, g_hvbo);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)HUD_MAX * (GLsizeiptr)sizeof(Point),
+                 0, GL_DYNAMIC_DRAW);
+    setup_attribs(g_hvao, g_hvbo);
 
     glGenVertexArrays(1, &g_mvao);
     glGenBuffers(1, &g_mvbo);
@@ -783,6 +875,7 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
             glUniformMatrix4fv(u_vp, 1, GL_FALSE, vp);
             glUniform3f(u_cam, g_px, g_py, g_pz);
             glUniform1f(u_time, now);
+            glUniform1f(u_flat, 0.0f);
             glUniform1f(u_monster, 0.0f);
             glUniform1f(u_persist, 1.0f);
             glBindVertexArray(g_vao);
@@ -809,6 +902,7 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
     if (len > 0.0001f) {
         float s = MOVE_SPEED * dt / len;
         try_move(mx * s, my * s, mz * s);
+        g_has_moved = 1;
     }
 
     if (-g_pz > g_best_depth) g_best_depth = -g_pz;
@@ -862,6 +956,7 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
     glUniformMatrix4fv(u_vp, 1, GL_FALSE, vp);
     glUniform3f(u_cam, g_px, g_py, g_pz);
     glUniform1f(u_time, now);
+    glUniform1f(u_flat, 0.0f);
 
     /* the map: surfaces, and they stay */
     if (g_count > 0) {
@@ -886,6 +981,24 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
         if (!mon_visible(&g_mon[i])) continue;
         mon_emit_points(&g_mon[i], now);
         glDrawArrays(GL_POINTS, 0, MON_POINTS);
+    }
+
+    {   /* the readout */
+        char left[40], right[40];
+        const char *hint = g_has_moved ? "" : "WASD TO MOVE";
+        sprintf(left, "DEPTH %5.1f M", -g_pz < 0.0f ? 0.0f : -g_pz);
+        sprintf(right, "LIFE %s", g_lives >= 3 ? "* * *"
+                                : (g_lives == 2 ? "* *" : (g_lives == 1 ? "*" : "-")));
+        hud_build(left, right, hint);
+
+        if (g_hud_n > 0) {
+            glUniform1f(u_monster, 0.0f);
+            glUniform1f(u_persist, 1.0f);
+            glUniform1f(u_flat, 1.0f);
+            glBindVertexArray(g_hvao);
+            glDrawArrays(GL_POINTS, 0, g_hud_n);
+            glUniform1f(u_flat, 0.0f);
+        }
     }
 }
 

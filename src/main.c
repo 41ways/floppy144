@@ -10,6 +10,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 #define APP_TITLE   "SOUNDING"
 #define APP_CLASS   "sounding_window"
@@ -261,6 +262,25 @@ static void read_mouse(HWND hwnd, float *dx, float *dy)
     SetCursorPos(centre.x, centre.y);
 }
 
+/* Dump the framebuffer as raw RGB with a tiny header. Called from -shot mode,
+ * which drives a scripted session and exits, so the look of a build can be
+ * checked without anyone sitting in front of it. */
+static void save_rgb(const char *path, int w, int h)
+{
+    unsigned char *px = (unsigned char *)malloc((size_t)w * h * 3);
+    FILE *f;
+    if (!px) return;
+    glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, px);
+    f = fopen(path, "wb");
+    if (f) {
+        fwrite(&w, 4, 1, f);
+        fwrite(&h, 4, 1, f);
+        fwrite(px, 1, (size_t)w * h * 3, f);
+        fclose(f);
+    }
+    free(px);
+}
+
 int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 {
     WNDCLASSA wc;
@@ -274,6 +294,9 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     int    fmt = 0;
     UINT   fmt_count = 0;
     float  title_timer = 0.0f;
+    /* -shot <file> <frame> [pingframe]: run a scripted session, save, quit */
+    char   shot_path[260]; int shot_at = 0, shot_ping = 3, frame = 0;
+    shot_path[0] = 0;
 
     const int pf_attribs[] = {
         WGL_DRAW_TO_WINDOW_ARB, GL_TRUE,
@@ -293,7 +316,13 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
         0
     };
 
-    (void)prev; (void)cmd; (void)show;
+    (void)prev; (void)show;
+
+    if (cmd && strstr(cmd, "-shot")) {
+        char *p = strstr(cmd, "-shot") + 5;
+        sscanf(p, "%259s %d %d", shot_path, &shot_at, &shot_ping);
+        if (shot_at <= 0) shot_at = 70;
+    }
 
     ZeroMemory(&wc, sizeof wc);
     wc.style         = CS_OWNDC | CS_HREDRAW | CS_VREDRAW;
@@ -391,8 +420,25 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
         g_ping   = 0;
         read_mouse(hwnd, &in.mdx, &in.mdy);
 
+        if (shot_path[0]) {          /* scripted: sound repeatedly, then look */
+            in.fwd   = (frame > 40);      /* walk, the way it is played */
+            in.back  = in.left = in.right = 0;
+            in.mdx = in.mdy = 0.0f;
+            /* stop sounding well before the capture so the last wave has
+               died and only the map it left is on screen */
+            in.ping = (shot_ping >= 0)
+                   && ((frame == 2) || (shot_ping > 0 && frame > 2
+                                       && frame < shot_at - 300
+                                       && (frame % shot_ping) == 0));
+        }
+
         game_frame(&in, dt, now, g_width, g_height);
         audio_update();
+
+        if (shot_path[0] && ++frame >= shot_at) {
+            save_rgb(shot_path, g_width, g_height);
+            g_running = 0;
+        }
         SwapBuffers(dc);
 
         /* no HUD yet, so the numbers that matter live in the title bar */
