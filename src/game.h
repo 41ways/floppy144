@@ -44,5 +44,6 @@ float game_fit(void);        /* clearance where the player stands, vs 0.62 */
 void  game_debug_spider(float now, int type);
 void  game_debug_autopilot(float dt);   /* steer down the cave, -shot only */
 void  game_debug_calm(void);            /* empty the cave, -shot only */
+void  game_debug_yaw(float deg);        /* point the camera, -shot only */
 
 #endif /* GAME_H */

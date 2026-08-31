@@ -1525,7 +1525,15 @@ static void new_attempt(unsigned seed, float now)
     g_stage_flash = 0.0f;
     g_stagef = (float)g_stage;
     g_dive = 0.0f;
-    g_shock = 0; g_shockf = 0.0f; g_ev = 0; g_ev_t = 0.0f;
+    /* Spawning deep has to bring what you would have been carrying. The two
+     * ambushes are at gates two and three, and everything about how the
+     * world looks past them hangs off having been shocked -- uLight does not
+     * come on at all until the second one, and uRoom follows it. Starting at
+     * 340 with a clean sheet gave the right geometry with the lights off,
+     * which is exactly why every deep demo came out looking like more cave. */
+    g_shock  = (g_start_depth >= GATE_3) ? 2 : (g_start_depth >= GATE_2 ? 1 : 0);
+    g_shockf = (float)g_shock;
+    g_ev = 0; g_ev_t = 0.0f;
     g_guide_next = 0.0f; g_road = 0.0f;
     g_wake = 0.0f;
     respawn(now);
@@ -2832,6 +2840,16 @@ void game_debug_calm(void)
 {
     g_calm = 1;
     g_mon_count = 0;
+}
+
+/* -shot only: aim. The spawn heading follows the passage, which in the hall
+ * means facing a row wall three metres off -- so every photograph of the
+ * place came back as one flat surface, and no amount of detail on it could
+ * be told from no detail at all. The long views in there run across the
+ * lanes, not down them. */
+void game_debug_yaw(float deg)
+{
+    g_yaw = deg * 0.0174532925f;
 }
 
 /* -shot only: drop a spider right in front and wake it, so the thing can be

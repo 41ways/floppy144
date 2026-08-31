@@ -520,6 +520,22 @@ static const char *CAVE_FS =
 "    alb = mix(alb, alb * 0.40, upr   * skirt * near);\n"
 "    alb = mix(alb, alb * 0.45, upr   * rail  * near);\n"
 "    alb = mix(alb, alb * 0.48, lying * seam  * near);\n"
+/* A hospital corridor is two colours, not one: a darker dado below the rail
+   where the trolleys hit it, pale above. A single tone floor to ceiling is
+   what a cave painted beige looks like, which is what this was. This one
+   does not fade with distance -- it is the wall's colour, not a detail on
+   it, and it is most of what makes the place read as built. */
+"    float dado = smoothstep(-0.88, -0.74, wy);\n"
+"    alb *= mix(1.0, mix(0.70, 1.10, dado), upr * uRoom);\n"
+/* and doors. Shut, one to a bay, with a frame around them. A corridor with
+   nothing off it is a tube; a corridor lined with doors that do not open is
+   the thing this place is supposed to be. */
+"    float dz2   = abs(mod(p.z + 3.5, 7.0) - 3.5);\n"
+"    float e1    = max(dz2 / 1.00, abs(wy + 0.72) / 1.02);\n"
+"    float door  = smoothstep(1.00, 0.93, e1);\n"
+"    float frame = smoothstep(0.90, 0.99, e1) * smoothstep(1.16, 1.03, e1);\n"
+"    alb = mix(alb, alb * 0.52, upr * door  * uRoom);\n"
+"    alb = mix(alb, alb * 1.22, upr * frame * uRoom);\n"
 "  }\n"
 /* ceiling panels on the same seven-metre grid as the pillars */
 "  if (uRoom > 0.5 && n.y < -0.7) {\n"
