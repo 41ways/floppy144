@@ -83,9 +83,19 @@
  * a puzzle. Doubled, and the extra goes into the parts that carry the horror
  * -- the mass of the body, the hung head, and legs solid enough to be legs.
  * 120 KB of RAM, nothing on disk, and the frame already draws 1.2 M points. */
-#define MON_POINTS      6000
-#define LEG_TUBE          10   /* points around the curve at each sample */
-#define LEG_RINGS         58   /* samples along it */
+/* The most any one of them uses is 3,724 (ribs and hands push the walkers
+ * past the listener). Everything above what is written gets gain 0 and is
+ * still handed to the card, so the slack is drawn and thrown away. */
+#define MON_POINTS      3900
+/* Eight legs at ten points a ring over fifty-eight rings is 4,640 of the
+ * 5,500 this animal is made of -- six points of leg for every one of body.
+ * Drawing the body alone proved it: the ribcage, the spine and the split head
+ * are all there and all perfectly legible, and with the legs on they vanish
+ * into the tangle. Changing the body did almost nothing to the picture (1,429
+ * pixels in 921,600) because the body was never what you were looking at.
+ * Legs thinner and sparser, body richer, and now the ribs carry the shape. */
+#define LEG_TUBE           7   /* points around the curve at each sample */
+#define LEG_RINGS         48   /* samples along it */
 /* Points add. Twice as many of them at the old per-point gain turned the whole
  * animal into one solid white blot with no legs, no head and no hollow under
  * the body -- brighter, and less of a monster. This gives the extra density
@@ -881,40 +891,107 @@ static void mon_emit_points(const Monster *m, float now)
     /* and it breathes, slowly, whether or not it is doing anything else */
     br = 1.0f + 0.055f * (float)sin(now * 2.1f + m->seed * 3.0f);
 
-    /* body: a swollen abdomen, a thin neck, and a head hung off the end of
-     * it. The head used to sit against the body like a second ball; slung
-     * forward on a neck it reads as something carried out in front, which is
-     * worse to have coming at you. */
-    for (i = 0; i < (m->type == T_LISTENER ? 190 : 430); i++) {
+    /* Why the old one was cute, and what the good creature designers do
+     * instead.
+     *
+     * It was a ball with a smaller ball on it. Those are the two roundest
+     * shapes there are, at the two sizes that read as a body and a head --
+     * which is the geometry of a mouse. Bilaterally tidy, small enough to
+     * take in at a glance, no negative space anywhere. Every one of those is
+     * a cuteness lever, and it had all of them pulled.
+     *
+     * What the well-liked monsters do, and what survives being drawn as a
+     * point cloud (structure reads; shading does not):
+     *
+     *  - Silent Hill: horror by recognition, not by strangeness. The thing
+     *    is a person, wrongly assembled. Hence a RIBCAGE -- and parallel
+     *    arcs happen to be the one structure a sparse cloud draws perfectly.
+     *  - Amnesia: the head is a gape, not a face. A split skull with a hole
+     *    down the middle of it instead of a sphere.
+     *  - RE4's Regenerador: elongation. Body dragged back, neck run long,
+     *    head carried far out in front of the mass.
+     *  - The Thing, Ito: asymmetry. Cute is symmetrical; this is built
+     *    lopsided, one side longer than the other, head cocked off-axis.
+     *  - and one human hand, on the front legs, because a hand where a foot
+     *    should be is the cheapest and worst tell there is.
+     */
+    {
+    float asym = (hash1(m->seed * 11.3f) - 0.5f) * 0.55f;   /* built lopsided */
+    float cock = asym * 0.10f * sc;                         /* head off-axis */
+
+    /* the abdomen: dragged out behind, not a ball under the head. The
+     * outward bias makes it a shell, so the ribs read over a hollow. */
+    /* Thin, and dim. Dense and bright it came back as one solid white mass
+     * with the ribs buried inside it -- and a featureless blot is where the
+     * eye goes first, so the animal was a blot with legs. The flesh is the
+     * quiet part; the bones are what you are meant to read. */
+    for (i = 0; i < (m->type == T_LISTENER ? 230 : 210); i++) {
         float a = hash1((float)i * 1.7f + m->seed) * 6.2831853f;
         float b = hash1((float)i * 3.1f + m->seed + 4.0f) * 3.1415927f;
-        float r = 0.26f * sc * br * (float)pow(hash1((float)i * 5.3f + m->seed), 0.34);
-        PUT(-0.13f * sc + r*(float)sin(b)*(float)cos(a) * 1.25f,
-             r*(float)sin(b)*(float)sin(a),
-             bob + r*(float)cos(b) * 0.75f, 1.0f);
+        float r = 0.235f * sc * br * (float)pow(hash1((float)i * 5.3f + m->seed), 0.20);
+        PUT(-0.20f * sc + r*(float)sin(b)*(float)cos(a) * 1.55f,
+             r*(float)sin(b)*(float)sin(a) * 0.74f,
+             bob + r*(float)cos(b) * 0.66f,
+             m->type == T_LISTENER ? 1.0f : 0.40f);
     }
-    for (i = 0; i < 60; i++) {          /* the neck */
-        float u = (float)i / 59.0f;
+    /* The ribs, and they are the body -- not a detail buried under it.
+     *
+     * First go put a proper shell on and the arcs behind it, and at the seven
+     * metres you actually meet one of these the whole thing came back as a
+     * red smear with limbs. Fine internal detail does not survive a sparse
+     * cloud at range; a silhouette does. So the flesh is nearly gone and six
+     * bright arcs carry the shape. A ribcage with nothing on it is a stronger
+     * outline than a body with a ribcage hidden inside it, and it is the same
+     * trick every good one of these pulls: you are not looking at an animal,
+     * you are looking at the inside of a person. */
+    if (m->type != T_LISTENER) {
+        for (k = 0; k < 6; k++) {
+            float xr = (-0.40f + 0.098f * (float)k) * sc;
+            float rw = 0.272f * sc * br
+                     * (0.50f + 0.50f * (float)sin(0.44f + 2.50f * (float)k / 5.0f));
+            for (i = 0; i < 52; i++) {
+                float t2 = (-1.04f + 2.08f * (float)i / 51.0f) * 1.44f;
+                PUT(xr + (hash1((float)(k*29+i) * 1.9f + m->seed) - 0.5f) * 0.020f * sc,
+                    rw * (float)sin(t2) * 0.90f,
+                    bob + rw * (float)cos(t2) * 0.84f, 1.45f);
+            }
+        }
+        /* and a spine down the length of them */
+        for (i = 0; i < 90; i++) {
+            float u = (float)i / 89.0f;
+            PUT((-0.46f + 0.66f * u) * sc,
+                (hash1((float)i * 3.3f + m->seed) - 0.5f) * 0.020f * sc,
+                bob + (0.215f - 0.030f * u) * sc * br, 1.30f);
+        }
+    }
+    for (i = 0; i < 74; i++) {          /* the neck, run long */
+        float u = (float)i / 73.0f;
         float a = hash1((float)i * 6.1f + m->seed + 7.0f) * 6.2831853f;
-        float r = 0.055f * sc;
-        PUT(0.10f * sc + u * 0.22f * sc + r*(float)cos(a),
-            r*(float)sin(a) * 0.7f,
-            bob - u * 0.10f * sc + r*(float)sin(a) * 0.7f, 0.85f);
+        float r = 0.048f * sc;
+        PUT(0.04f * sc + u * 0.36f * sc + r*(float)cos(a),
+            u * cock + r*(float)sin(a) * 0.7f,
+            bob - u * 0.13f * sc + r*(float)sin(a) * 0.7f, 0.85f);
     }
-    for (i = 0; i < 180; i++) {         /* the head, hung low and forward */
-        float a = hash1((float)i * 2.3f + m->seed + 9.0f) * 6.2831853f;
-        float b = hash1((float)i * 4.7f + m->seed + 2.0f) * 3.1415927f;
-        float r = 0.115f * sc;
-        PUT(0.36f * sc + r*(float)sin(b)*(float)cos(a),
-            r*(float)sin(b)*(float)sin(a),
-            bob - 0.10f * sc + r*(float)cos(b) * 0.8f, 1.0f);
+    /* The head: a long wedge split down the middle, and what is between the
+     * halves is nothing. It opens toward you as it tapers, so the front of
+     * the animal is a gap rather than a face. */
+    for (i = 0; i < 210; i++) {
+        float side = (i & 1) ? 1.0f : -1.0f;
+        float u    = hash1((float)i * 2.3f + m->seed + 9.0f);
+        float a    = hash1((float)i * 4.7f + m->seed + 2.0f) * 6.2831853f;
+        float rr   = 0.072f * sc * (1.02f - 0.62f * u);
+        float gap  = (0.022f + 0.062f * u) * sc;
+        PUT(0.40f * sc + u * 0.30f * sc + rr*(float)cos(a) * 0.55f,
+            cock + side * gap + rr*(float)sin(a) * 0.50f,
+            bob - 0.13f * sc - u * 0.045f * sc + rr*(float)cos(a) * 0.85f, 1.0f);
     }
     for (i = 0; i < 50; i++) {          /* a pair of them, in front of that */
         float u    = (float)(i % 25) / 24.0f;
         float side = (i < 25) ? 1.0f : -1.0f;
-        PUT(0.44f * sc + u * 0.14f * sc,
-            side * (0.048f - u * 0.032f) * sc,
-            bob - 0.10f * sc - u * 0.050f * sc, 1.0f);
+        PUT(0.68f * sc + u * 0.20f * sc,
+            cock + side * (0.060f - u * 0.040f) * sc * (1.0f + side * asym),
+            bob - 0.16f * sc - u * 0.060f * sc, 1.0f);
+    }
     }
 
     /* Eight legs drawn to wherever their feet are actually standing. The
@@ -933,7 +1010,14 @@ static void mon_emit_points(const Monster *m, float now)
          * that grew. */
         float lv = 0.68f + hash1((float)i * 3.37f + m->seed * 2.0f) * 0.74f;
         float tk = 0.72f + hash1((float)i * 5.11f + m->seed * 4.0f) * 0.66f;
+        /* and the two sides do not match either. Eight legs that disagree
+         * with each other individually still arrange themselves into a tidy
+         * mirror; a body built longer down one side does not. */
+        float aside = (i & 1) ? 1.0f : -1.0f;
+        float asym  = 1.0f + aside * (hash1(m->seed * 11.3f) - 0.5f) * 0.55f;
         float k1x, k1y, k1z, k2x, k2y, k2z;
+        lv *= asym;
+        tk *= (2.0f - asym);
         /* Two joints, not one. A knee that rises above the body and a shin
          * that comes back down to the foot is what a spider's leg does, and
          * a single arc never looked like anything but a hoop. */
@@ -952,8 +1036,8 @@ static void mon_emit_points(const Monster *m, float now)
             float a   = w3 * k1x + w2 * k2x + w1 * ex;
             float b2  = w3 * k1y + w2 * k2y + w1 * ey;
             float c2  = w3 * k1z + w2 * k2z + w1 * ez + bob * iu * iu;
-            float rad = (0.175f * iu * iu + 0.028f) * sc * tk
-                      * (m->type == T_LISTENER ? 0.40f : 1.0f);
+            float rad = (0.112f * iu * iu + 0.020f) * sc * tk
+                      * (m->type == T_LISTENER ? 0.52f : 1.0f);
             int   q;
             for (q = 0; q < LEG_TUBE; q++) {
                 float h  = (float)(i * 97 + k * 13 + q) * 1.31f + m->seed;
@@ -963,7 +1047,26 @@ static void mon_emit_points(const Monster *m, float now)
                 PUT(a  + rr * (float)sin(bb) * (float)cos(aa),
                     b2 + rr * (float)sin(bb) * (float)sin(aa),
                     c2 + rr * (float)cos(bb),
-                    0.55f + 0.45f * iu);
+                    0.40f + 0.32f * iu);
+            }
+        }
+        /* A hand, on the two front legs. Five digits splayed on the rock
+         * where a foot should taper to a point. Nothing else on the animal
+         * costs ninety points and says as plainly that it used to be
+         * somebody -- and it is the part nearest you when it arrives. */
+        if (i < 2 && m->type != T_LISTENER) {
+            int d, s;
+            for (d = 0; d < 5; d++) {
+                float sp = (-0.5f + 0.25f * (float)d);          /* fan */
+                float dl = (0.115f + 0.048f * (float)(d == 2)) * sc
+                         * (0.72f + hash1((float)(i*17+d) * 2.7f + m->seed) * 0.55f);
+                for (s = 1; s <= 9; s++) {
+                    float t3 = (float)s / 9.0f;
+                    float cu = t3 * t3 * 0.4f;                  /* curls under */
+                    PUT(ex + dl * t3 * (float)cos(sp) * 1.15f,
+                        ey + dl * t3 * (float)sin(sp) * 1.9f,
+                        ez + dl * cu * 0.9f, 1.05f);
+                }
             }
         }
     }
@@ -2933,25 +3036,32 @@ void game_debug_yaw(float deg)
 void game_debug_spider(float now, int type)
 {
     Monster *m = &g_mon[0];
-    float f2[3], r2[3], u2[3], n[3], t;
+    float f2[3], r2[3], u2[3], n[3], t, d;
     g_mon_count = 1;
     m->seed = 4.0f + (float)type;
-    /* Wherever the camera is actually pointed, on the first wall it meets.
-     * The old fixed angle round the tunnel put it out past the edge of the
-     * frame at three metres, so every capture ever taken of a monster was a
-     * few red legs reaching in from the left with the body off-screen -- and
-     * "make them more frightening" could not be judged from one. */
+    mon_make(m, type, 0.3f);
+    /* Ahead of the camera, standing on the floor, far enough back that the
+     * whole animal is in frame.
+     *
+     * Two goes at this. A fixed angle round the tunnel put it off the left
+     * edge; the nearest wall the camera happened to be pointed at put the
+     * big one -- which is nearly four times the small one -- half out of the
+     * top corner. The distance has to come from how big the thing is. */
     basis(g_yaw, g_pitch, f2, r2, u2);
-    if (!cave_ray(g_px, g_py, g_pz, f2[0], f2[1], f2[2], 30.0f, &t)) t = 6.0f;
-    if (t < 4.0f) t = 4.0f;
-    m->x = g_px + f2[0] * t;
-    m->y = g_py + f2[1] * t;
-    m->z = g_pz + f2[2] * t;
+    d = 3.2f + 2.8f * m->scale;
+    if (cave_ray(g_px, g_py, g_pz, f2[0], f2[1], f2[2], d, &t) && t > 0.6f)
+        d = t - 0.4f;
+    m->x = g_px + f2[0] * d;
+    m->y = g_py + f2[1] * d;
+    m->z = g_pz + f2[2] * d;
+    if (cave_ray(m->x, m->y, m->z, 0.0f, -1.0f, 0.0f, 5.0f, &t))
+        m->y -= t - 0.06f;                       /* put its feet on the ground */
     cave_normal(m->x, m->y, m->z, n);
     m->nx = n[0]; m->ny = n[1]; m->nz = n[2];
-    m->dx = 0.0f; m->dy = 0.0f; m->dz = 1.0f;
+    m->dx = -f2[0]; m->dy = 0.0f; m->dz = -f2[2];   /* facing you */
+    t = (float)sqrt(m->dx*m->dx + m->dz*m->dz);
+    if (t > 1e-4f) { m->dx /= t; m->dz /= t; }
     m->travel = 0.0f; m->dash = 0.0f; m->moving = 1;
-    mon_make(m, type, 0.3f);
     m->state = MON_CHARGING;
     m->timer = 30.0f;
     (void)now;
