@@ -3410,7 +3410,10 @@ void game_debug_beast(float now, int type)
     m->timer  = 60.0f;
     m->travel = 0.0f;
     m->stun   = 0.0f;
-    m->dx = -f[0]; m->dy = 0.0f; m->dz = -f[2];
+    /* three quarters on: head-on, the abdomen hides everything */
+    m->dx = -f[0] * 0.5f - f[2] * 0.87f;
+    m->dy = 0.0f;
+    m->dz = -f[2] * 0.5f + f[0] * 0.87f;
     m->tx = g_px; m->ty = g_py; m->tz = g_pz;
     (void)now;
 }
