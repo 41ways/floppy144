@@ -330,6 +330,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     int    shot_auto = 0;     /* -auto: let the scripted walker steer */
     int    shot_calm = 0;     /* -calm: and send nothing after it */
     int    shot_menu = 0;     /* -menu: rehearse the pause menu */
+    int    shot_live = 0;     /* -live: keep sounding right up to the shot */
     int    shot_enter = 0;    /* -enter N: press Enter once, at frame N */
     float  start_depth = START_DEPTH;
     shot_path[0] = 0;
@@ -372,6 +373,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     if (cmd && strstr(cmd, "-auto")) shot_auto = 1;
     if (cmd && strstr(cmd, "-calm")) shot_calm = 1;
     if (cmd && strstr(cmd, "-menu")) shot_menu = 1;
+    if (cmd && strstr(cmd, "-live")) shot_live = 1;
     if (cmd && strstr(cmd, "-enter")) sscanf(strstr(cmd, "-enter") + 6, "%d", &shot_enter);
 
     ZeroMemory(&wc, sizeof wc);
@@ -514,11 +516,13 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
             in.fwd   = (frame > 40);      /* walk, the way it is played */
             in.back  = in.left = in.right = 0;
             in.mdx = in.mdy = 0.0f;
-            /* stop sounding well before the capture so the last wave has
-               died and only the map it left is on screen */
+            /* Stop sounding well before the capture so the last wave has
+               died and only the map it left is on screen -- which is the
+               right frame to compare two builds by, and the wrong one to
+               judge how the game looks. -live keeps the wave in the air. */
             in.ping = (shot_ping >= 0)
                    && ((frame == 2) || (shot_ping > 0 && frame > 2
-                                       && frame < shot_at - 300
+                                       && (shot_live || frame < shot_at - 300)
                                        && (frame % shot_ping) == 0));
             if (shot_auto) game_debug_autopilot(dt);
 

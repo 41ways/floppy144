@@ -440,7 +440,15 @@ static const char *CAVE_FS =
 "    if (d < 0.006) { hit = true; break; }\n"
 "    t += max(d*0.42, 0.012);\n"
 "    if (t > 32.0) break; }\n"
-"  if (!hit) { FragColor = vec4(0.0, 0.0, 0.0, 0.0); return; }\n"
+/* In the dark, distance is black and that is the whole point - the cave is
+   only what the sounding gave back. But once the corridor takes over, the
+   place is lit, and a hole of pure black in the middle of a lit room reads
+   as a tear in the picture rather than as depth. So far away goes to the
+   room's own haze, at the value the horizon lands on after tone mapping. */
+"  if (!hit) {\n"
+"    FragColor = vec4(mix(vec3(0.68, 0.67, 0.64), vec3(1.0), uWhite),\n"
+"                     max(uRoom, uWhite));\n"
+"    return; }\n"
 "\n"
 "  vec3 p = uCam + rd*t;\n"
 "  vec3 n = fnorm(p);\n"
@@ -460,6 +468,12 @@ static const char *CAVE_FS =
 "  alb = mix(alb, vec3(0.30,0.34,0.38), uWet*0.55);\n"
 /* built surfaces are pale and even; the grain fades with the rock */
 "  alb = mix(alb, vec3(0.84, 0.79, 0.55), uRoom * 0.9);\n"
+/* A corridor reads because its surfaces do not share a value: the ceiling
+   carries the light, the walls take less of it, the floor least of all.
+   Lit only by panels overhead, every plane landed on the same beige and the
+   room lost its corners -- you could not tell where the floor met the wall. */
+"  alb *= mix(1.0, 0.78 - 0.22*clamp(n.y, 0.0, 1.0)\n"
+"                      + 0.30*clamp(-n.y, 0.0, 1.0), uRoom);\n"
 /* ceiling panels on the same seven-metre grid as the pillars */
 "  if (uRoom > 0.5 && n.y < -0.7) {\n"
 "    vec2 pm = abs(mod(p.xz, 7.0) - 3.5);\n"
@@ -507,12 +521,19 @@ static const char *CAVE_FS =
 "      float pdif = max(dot(n, pld), 0.0);\n"
 "      vec3 hv = normalize(pld - rd);\n"
 "      float pspec = pow(max(dot(n, hv), 0.0), 26.0);\n"
-"      col += alb * pan * pdif * att * 0.85;\n"
+/* with the corners left alone, so the pillars have a base and the wall
+   meeting the floor is a line rather than a guess */
+"      col += alb * pan * pdif * att * 0.85 * mix(ao, 1.0, 0.35);\n"
 "      col += pan * pspec * att * 0.55;\n"
 "    }\n"
 "  }\n"
-"  float fog = exp(-t * (0.075 - 0.03*uLight));\n"
-"  col = mix(vec3(0.010,0.012,0.018) + warm*0.045*uLight, col, fog);\n"
+/* Depth needs somewhere to go. In the cave that is darkness; in the corridor
+   everything is the same pale albedo under the same soft panels, so without
+   a haze to recede into the far wall sits at the same value as the near one
+   and the whole frame flattens into one sheet of beige. */
+"  float fog = exp(-t * (0.075 - 0.03*uLight + 0.022*uRoom));\n"
+"  col = mix(mix(vec3(0.010,0.012,0.018) + warm*0.045*uLight,\n"
+"                vec3(0.66, 0.63, 0.55), uRoom), col, fog);\n"
 "  col = col / (col + vec3(0.9));\n"
 "  col = pow(max(col, vec3(0.0)), vec3(0.4545));\n"
 "  col += vec3(1.0, 0.98, 0.95) * uPulse * 0.10 * uRoom;\n"
