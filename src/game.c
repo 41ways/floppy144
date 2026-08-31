@@ -347,9 +347,24 @@ static void build_branches(void)
 static float branch_air(float x, float y, float z, int i)
 {
     if (i < 0 || i >= BRANCHES) return -1000.0f;
-    return BRANCH_RAD - seg_dist(x, y, z,
-                                 g_br[i][0], g_br[i][1], g_br[i][2],
-                                 g_br[i][3], g_br[i][4], g_br[i][5]);
+    {   /* The side passages are cave, and where the cave has become corridor
+         * they were still being cut at full width -- a three and a half metre
+         * round tube punched through a suspended ceiling and a tiled floor,
+         * which is the one thing down there that cannot be read as a building
+         * however well it is lit. Narrowed as the room takes over. Still open,
+         * so the voices at their tips are still reachable and still worth a
+         * sounding; a hole you go through rather than a bubble the corridor
+         * turns out to be inside of.
+         *
+         * Off the sampled depth and nothing else, because the shader carves
+         * these too and the two have to agree -- the pool room spent a while
+         * being a square room in the points and a round chamber in the rock. */
+        float rk = BRANCH_RAD * (1.0f - 0.42f
+                 * smoothstep01(GATE_3 + 8.0f, GATE_END - 4.0f, -z));
+        return rk - seg_dist(x, y, z,
+                             g_br[i][0], g_br[i][1], g_br[i][2],
+                             g_br[i][3], g_br[i][4], g_br[i][5]);
+    }
 }
 
 /* How much the passage opens out at this depth. Zero everywhere except at the

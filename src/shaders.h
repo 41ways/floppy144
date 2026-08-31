@@ -432,8 +432,10 @@ static const char *CAVE_FS =
    metre nearer than the one you actually stop against. */
 "  if (uRoad < 0.5) m = min(m, p.z + 526.0);\n"
 "  int i0 = int(clamp(-p.z/34.0, 0.0, 14.0));\n"
-"  m = max(m, 1.75 - segd(p, uBrA[i0],   uBrB[i0]));\n"
-"  m = max(m, 1.75 - segd(p, uBrA[i0+1], uBrB[i0+1]));\n"
+/* narrowed where the corridor takes over -- mirrors branch_air */
+"  float brk = 1.75 * (1.0 - 0.42 * smoothstep(368.0, 476.0, -p.z));\n"
+"  m = max(m, brk - segd(p, uBrA[i0],   uBrB[i0]));\n"
+"  m = max(m, brk - segd(p, uBrA[i0+1], uBrB[i0+1]));\n"
 "  return m; }\n"
 "\n"
 "vec3 fnorm(vec3 p){ vec2 e = vec2(0.012, 0.0);\n"
@@ -463,10 +465,20 @@ static const char *CAVE_FS =
 "  vec3 rd = normalize(uRight*uv.x + uUp*uv.y + uFwd*1.35);\n"
 "  float t = 0.05;\n"
 "  bool hit = false;\n"
-"  for (int i = 0; i < 150; i++){\n"
+"  for (int i = 0; i < 200; i++){\n"
 "    float d = field(uCam + rd*t);\n"
 "    if (d < 0.006) { hit = true; break; }\n"
-"    t += max(d*0.42, 0.012);\n"
+/* 0.42 is the cave's number, because the fbm lies about how far the wall is.
+   The corridor looked like it should take a bolder step -- it is boxes -- and
+   at 0.94 it grew a staircase down every wall edge instead. Its field is not
+   exact either: the row walls carve their doorways with a hard conditional
+   and the union of two rooms is a max, and both of those hand back a distance
+   larger than the true one, so a bold step walks straight through a wall near
+   a doorway. What fixes it is not a smaller factor but a ceiling on the step,
+   which bounds how far any single overshoot can carry -- and then the factor
+   can stay bold, so a ray grazing a pillar still has the reach to find the
+   wall behind it instead of giving up in the middle of the picture. */
+"    t += clamp(d * mix(0.42, 0.90, uRoom), 0.012, mix(9.0, 0.22, uRoom));\n"
 "    if (t > 32.0) break; }\n"
 /* In the dark, distance is black and that is the whole point - the cave is
    only what the sounding gave back. But once the corridor takes over, the
@@ -494,8 +506,20 @@ static const char *CAVE_FS =
 "      alb = vec3(0.24, 0.20, 0.16);\n"
 "  }\n"
 "  alb = mix(alb, vec3(0.30,0.34,0.38), uWet*0.55);\n"
-/* built surfaces are pale and even; the grain fades with the rock */
-"  alb = mix(alb, vec3(0.84, 0.79, 0.55), uRoom * 0.9);\n"
+/* built surfaces are pale and even; the grain fades with the rock.
+   Three materials, not one. Every plane in here was the same beige with a
+   brightness multiplier on it, and a brightness multiplier is not a
+   material -- it is the same paint under more light. A corridor is grey-green
+   vinyl underfoot, warm painted plaster at the sides and near-white mineral
+   fibre overhead, and those do not sit on the same hue at all. */
+"  float m_flr = smoothstep(0.48, 0.86,  n.y);\n"
+"  float m_cei = smoothstep(0.48, 0.86, -n.y);\n"
+"  {\n"
+"    vec3 rmat = vec3(0.80, 0.765, 0.665);\n"                 /* wall paint */
+"    rmat = mix(rmat, vec3(0.395, 0.412, 0.390), m_flr);\n"   /* vinyl */
+"    rmat = mix(rmat, vec3(0.905, 0.895, 0.855), m_cei);\n"   /* ceiling tile */
+"    alb = mix(alb, rmat, uRoom * 0.9);\n"
+"  }\n"
 /* The sign over the door -- the one saturated thing in the game. Down here
    every surface is the same pale beige and there is nothing to walk toward;
    this says the way out is a real place, and gives the last stretch of the
@@ -525,8 +549,10 @@ static const char *CAVE_FS =
    carries the light, the walls take less of it, the floor least of all.
    Lit only by panels overhead, every plane landed on the same beige and the
    room lost its corners -- you could not tell where the floor met the wall. */
-"  alb *= mix(1.0, 0.78 - 0.22*clamp(n.y, 0.0, 1.0)\n"
-"                      + 0.30*clamp(-n.y, 0.0, 1.0), uRoom);\n"
+/* Softer than it was, because the three materials above now carry most of
+   this. Left at the old strength on top of them the floor went to mud. */
+"  alb *= mix(1.0, 0.94 - 0.11*clamp(n.y, 0.0, 1.0)\n"
+"                      + 0.13*clamp(-n.y, 0.0, 1.0), uRoom);\n"
 /* What a corridor has that a lit tube does not: a rail at hand height, a
    skirting where the wall meets the floor, and tiles overhead and underfoot
    to count your way along. None of it is geometry -- it is read off the
@@ -548,6 +574,24 @@ static const char *CAVE_FS =
 "    alb = mix(alb, alb * 0.40, upr   * skirt * near);\n"
 "    alb = mix(alb, alb * 0.45, upr   * rail  * near);\n"
 "    alb = mix(alb, alb * 0.48, lying * seam  * near);\n"
+/* Wear. A surface with no history on it is the tell that gives away every
+   rendered room: real paint is dirtier at the bottom than the top, because
+   that is where the trolleys and the mops and the shoes reach. Grime rising
+   from the skirting, and streaks running down -- constant in y, so the noise
+   reads as something that ran rather than as noise. */
+"    float low  = smoothstep(-0.55, -1.66, wy);\n"
+"    float dirt = grain(p * 2.1) * 0.55 + grain(p * 8.5) * 0.45;\n"
+"    float strk = grain(vec3(p.x * 5.5, 0.0, p.z * 5.5));\n"
+"    alb *= mix(1.0, 0.70 + 0.34 * dirt, upr * low * near * 0.80);\n"
+"    alb *= mix(1.0, 0.84 + 0.22 * strk, upr * low * near * 0.55);\n"
+/* and the floor is not clean either: mop swirl, wide and faint */
+"    alb *= mix(1.0, 0.90 + 0.16 * grain(p * 1.35), m_flr * near * 0.70);\n"
+/* A suspended ceiling is a 600 mm grid of tiles in a metal tee. The seam
+   above was on the floor's 1.75 m tile, which is the wrong size for a
+   ceiling by nearly three times and read as a big flat sheet. */
+"    vec2  cg   = abs(mod(p.xz + 0.3, 0.6) - 0.3);\n"
+"    float tbar = smoothstep(0.268, 0.294, max(cg.x, cg.y));\n"
+"    alb = mix(alb, alb * 0.74, m_cei * tbar * near);\n"
 /* A hospital corridor is two colours, not one: a darker dado below the rail
    where the trolleys hit it, pale above. A single tone floor to ceiling is
    what a cave painted beige looks like, which is what this was. This one
@@ -564,11 +608,38 @@ static const char *CAVE_FS =
 "    float frame = smoothstep(0.90, 0.99, e1) * smoothstep(1.16, 1.03, e1);\n"
 "    alb = mix(alb, alb * 0.52, upr * door  * uRoom);\n"
 "    alb = mix(alb, alb * 1.22, upr * frame * uRoom);\n"
+/* What a ward door has: a wired-glass vision panel at head height, and a
+   steel kickplate at the bottom where it gets shoved open. Two rectangles,
+   and the door stops being a darker patch of wall. */
+"    float vis  = smoothstep(0.52, 0.44, max(dz2 / 0.30, abs(wy + 0.12) / 0.34))\n"
+"               * door;\n"
+"    float kick = smoothstep(0.99, 0.90, dz2 / 1.00)\n"
+"               * smoothstep(-1.36, -1.44, wy) * door;\n"
+"    alb = mix(alb, alb * 2.05, upr * vis  * uRoom);\n"
+"    alb = mix(alb, alb * 1.45, upr * kick * uRoom);\n"
 "  }\n"
-/* ceiling panels on the same seven-metre grid as the pillars */
+/* Ceiling panels on the same seven-metre grid as the pillars -- and not all
+   of them working. A corridor where every fixture is identical and every one
+   is lit is a diagram of a corridor. One in eight is out and the rest differ,
+   which is what a real ceiling looks like and is most of why the far end of
+   this place now feels like somewhere nobody has been for a while. The value
+   comes from the cell, so it is the same panel every frame. */
+"  float plive = 1.0;\n"
+"  if (uRoom > 0.15) {\n"
+"    vec2 pcell = floor(p.xz / 7.0);\n"
+"    float pj = h1(pcell.x * 31.7 + pcell.y * 7.13 + uSeed);\n"
+"    plive = pj < 0.125 ? 0.10 : (0.80 + 0.42 * pj);\n"
+"  }\n"
 "  if (uRoom > 0.5 && n.y < -0.7) {\n"
 "    vec2 pm = abs(mod(p.xz, 7.0) - 3.5);\n"
-"    if (max(pm.x, pm.y) < 1.1) alb = vec3(1.35, 1.33, 1.22);\n"
+/* the diffuser sits in a frame, so the fitting has an edge rather than
+   fading into the tile it is set into */
+"    float pe = max(pm.x, pm.y);\n"
+"    if (pe < 1.16) {\n"
+"      alb = mix(vec3(0.62, 0.61, 0.58),\n"
+"                vec3(1.35, 1.33, 1.22) * plive,\n"
+"                smoothstep(1.10, 1.02, pe));\n"
+"    }\n"
 "  }\n"
 "\n"
 "  vec2 lc = centre(uCam.z - 20.0);\n"
@@ -587,7 +658,10 @@ static const char *CAVE_FS =
    sounding would stop being the way you see. The corridor doubles it. */
 "  float sky = clamp(n.y * 0.5 + 0.5, 0.0, 1.0);\n"
 "  vec3 hemi = mix(warm * 0.55, vec3(0.85, 0.90, 1.0), sky);\n"
-"  vec3 col  = alb * hemi * uLight * (0.16 + 0.40*uRoom) * ao;\n"
+/* Less flat fill in the corridor. Ambient this high plus panels plus haze
+   left the whole room inside a third of a stop -- no shadow under anything,
+   no dark in any corner, which is the look of a render and not of a room. */
+"  vec3 col  = alb * hemi * uLight * (0.16 + 0.20*uRoom) * ao;\n"
 /* and a floor bounce, so ceilings are not painted-on black */
 "  col += alb * warm * clamp(-n.y, 0.0, 1.0) * uLight * 0.10;\n"
 "  col += alb * warm * dif * mix(sh, 1.0, 0.22) * (0.18 + 0.55*uLight);\n"
@@ -611,18 +685,59 @@ static const char *CAVE_FS =
 "      float att = 1.0 / (1.0 + pd2 * 0.10);\n"
 "      float pdif = max(dot(n, pld), 0.0);\n"
 "      vec3 hv = normalize(pld - rd);\n"
-"      float pspec = pow(max(dot(n, hv), 0.0), 26.0);\n"
+/* Two lobes, because two materials. Paint is semi-gloss and answers wide;
+   the vinyl underfoot is polished and answers narrow and hard. One lobe for
+   everything is what makes a room look like it is made of paper. */
+"      float pw = pow(max(dot(n, hv), 0.0), 26.0);\n"
+"      float pg = pow(max(dot(n, hv), 0.0), 170.0);\n"
+/* and the fitting this light comes out of is the one whose cell it is in,
+   so a dead panel is dark and casts nothing */
+"      vec2  pcl = floor(pcv / 7.0);\n"
+"      float pjj = h1(pcl.x * 31.7 + pcl.y * 7.13 + uSeed);\n"
+"      float plv = pjj < 0.125 ? 0.10 : (0.80 + 0.42 * pjj);\n"
 /* with the corners left alone, so the pillars have a base and the wall
    meeting the floor is a line rather than a guess */
-"      col += alb * pan * pdif * att * 0.85 * mix(ao, 1.0, 0.35);\n"
-"      col += pan * pspec * att * 0.55;\n"
+"      col += alb * pan * pdif * att * 0.85 * plv * mix(ao, 1.0, 0.20);\n"
+"      col += pan * pw * att * 0.34 * plv;\n"
+"      col += pan * pg * att * 1.30 * plv * m_flr;\n"
+"    }\n"
+"  }\n"
+/* The floor is polished, and the one thing that says so is the ceiling lying
+   in it. Reflect the view ray off the floor, run it up to the height the
+   fittings hang at, and see whether it lands on one: if it does, that panel
+   is in the floor. It is a real planar reflection and it costs no march --
+   and it is the single biggest reason a corridor reads as a photograph
+   rather than as a diagram, because a matte floor is a thing that does not
+   exist in a building. The footprint softens with reflected distance, so a
+   far light smears down the floor toward you instead of staying a rectangle.
+   Not on the road: the reflected grid streaming past under the white was
+   more than that moment wants. */
+"  if (uRoom > 0.4 && uRoad < 0.5 && m_flr > 0.02) {\n"
+"    vec3  rv = reflect(rd, n);\n"
+"    float ch = (centre(p.z).y + 1.02) - p.y;\n"
+"    if (rv.y > 0.05 && ch > 0.1) {\n"
+"      float k    = ch / rv.y;\n"
+"      vec3  hp   = p + rv * k;\n"
+"      vec2  pm2  = abs(mod(hp.xz, 7.0) - 3.5);\n"
+"      float soft = 0.05 + 0.030 * k;\n"
+"      float inp  = 1.0 - smoothstep(1.10 - soft, 1.10 + soft, max(pm2.x, pm2.y));\n"
+"      vec2  rcl  = floor(hp.xz / 7.0);\n"
+"      float rjj  = h1(rcl.x * 31.7 + rcl.y * 7.13 + uSeed);\n"
+"      float rlv  = rjj < 0.125 ? 0.10 : (0.80 + 0.42 * rjj);\n"
+"      col += vec3(1.00, 0.97, 0.88) * inp * rlv * m_flr * uRoom\n"
+"           * 0.62 / (1.0 + k * 0.16);\n"
 "    }\n"
 "  }\n"
 /* Depth needs somewhere to go. In the cave that is darkness; in the corridor
    everything is the same pale albedo under the same soft panels, so without
    a haze to recede into the far wall sits at the same value as the near one
    and the whole frame flattens into one sheet of beige. */
-"  float fog = exp(-t * (0.075 - 0.03*uLight + 0.022*uRoom));\n"
+/* The corridor's share of this was far too much of it: two thirds of the
+   picture was haze by fifteen metres, so every surface converged on the same
+   pale value and the room came back looking like weather. A lit building is
+   mostly clear air. Enough left to keep the far end from sitting at the same
+   value as the near end, and no more. */
+"  float fog = exp(-t * (0.075 - 0.03*uLight - 0.026*uRoom));\n"
 "  col = mix(mix(vec3(0.010,0.012,0.018) + warm*0.045*uLight,\n"
 "                vec3(0.66, 0.63, 0.55), uRoom), col, fog);\n"/* The sign takes some of the haze and not all of it. Fogged like a wall it
    came out the same mint as everything else, and a sign that has gone the
@@ -631,6 +746,14 @@ static const char *CAVE_FS =
 "  col = mix(col, sign_col, sign_m * mix(0.55, 1.0, fog));\n"
 "  col = col / (col + vec3(0.9));\n"
 "  col = pow(max(col, vec3(0.0)), vec3(0.4545));\n"
+/* And the last of the flatness was the tone curve, not the lighting.
+   Reinhard over 0.9 puts everything from a half to twice middle grey inside
+   0.62..0.85 on the screen -- a fifth of the range for almost the whole
+   picture -- so no amount of work on materials or shadow was going to reach
+   the eye. An S over the top of it gives the corridor its blacks and its
+   highlights back. Corridor only: the cave is dark on purpose, and a curve
+   like this would take what little it has. */
+"  col = mix(col, col*col*(3.0 - 2.0*col), 0.45 * uRoom);\n"
 "  col += vec3(1.0, 0.98, 0.95) * uPulse * 0.10 * uRoom;\n"
 "  col = mix(col, vec3(1.0), uWhite);\n"
 "  FragColor = vec4(col, 1.0); }\n";
