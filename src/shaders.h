@@ -499,6 +499,28 @@ static const char *CAVE_FS =
    room lost its corners -- you could not tell where the floor met the wall. */
 "  alb *= mix(1.0, 0.78 - 0.22*clamp(n.y, 0.0, 1.0)\n"
 "                      + 0.30*clamp(-n.y, 0.0, 1.0), uRoom);\n"
+/* What a corridor has that a lit tube does not: a rail at hand height, a
+   skirting where the wall meets the floor, and tiles overhead and underfoot
+   to count your way along. None of it is geometry -- it is read off the
+   wall's own coordinates, so it costs nothing, and it is the whole reason
+   the place has a size you can feel. It fades out with distance rather than
+   shimmering away into noise. */
+"  if (uRoom > 0.3) {\n"
+"    float wy    = p.y - centre(p.z).y;\n"
+"    float upr   = 1.0 - clamp(abs(n.y) * 2.4, 0.0, 1.0);\n"
+"    float lying = clamp(abs(n.y) * 1.8 - 0.7, 0.0, 1.0);\n"
+"    float near  = exp(-t * 0.11) * uRoom;\n"
+"    float rail  = smoothstep(0.062, 0.036, abs(wy + 0.80));\n"
+"    float skirt = smoothstep(0.19, 0.12, abs(wy + 1.62));\n"
+"    vec2  tm    = abs(mod(p.xz + 0.875, 1.75) - 0.875);\n"
+"    float seam  = smoothstep(0.842, 0.871, max(tm.x, tm.y));\n"
+/* all of it darker than the wall, never lighter: after the panels are done
+   with it the wall is already near white, and a bright line on a bright
+   wall is a line nobody sees */
+"    alb = mix(alb, alb * 0.40, upr   * skirt * near);\n"
+"    alb = mix(alb, alb * 0.45, upr   * rail  * near);\n"
+"    alb = mix(alb, alb * 0.48, lying * seam  * near);\n"
+"  }\n"
 /* ceiling panels on the same seven-metre grid as the pillars */
 "  if (uRoom > 0.5 && n.y < -0.7) {\n"
 "    vec2 pm = abs(mod(p.xz, 7.0) - 3.5);\n"
