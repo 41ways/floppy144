@@ -2,6 +2,21 @@
 """Prove the hall maze is walkable, using the game's own distance field.
 
     python3 tools/mazecheck.py [seed-count]
+    python3 tools/mazecheck.py -s 20260904 [more seeds...]
+    python3 tools/mazecheck.py -f 997.999 1.214 0.914
+    python3 tools/mazecheck.py -y -0.7 [any of the above]
+
+The first form samples the space of caves. The second floods the cave one
+exact seed builds. The third floods a cave by the three numbers that actually
+define it -- copy them out of the "cave seed .. wander .. rough" line a -shot
+run writes to shotlog.txt, which is the only way to check the cave a capture
+really walked: game_init's seed does not survive the click that starts a run.
+
+-y sets how far below the tunnel centre to flood. The default -0.3 is the most
+open slice there is, so it is a ceiling on walkability rather than a promise --
+and the ceiling is not tight: a scripted walk measured the player floating
+around 0.7 m below centre, where the same cells lose about 0.4 m of clearance.
+Nothing gives the player a fixed height, so the honest check is a range.
 
 The hall past gate two is a seven-metre grid of pillars with a wall across
 every row and one doorway in it. A seed whose doorways happen to line up
@@ -45,10 +60,10 @@ HARNESS = r"""
 #define GATE_R 9.5f
 #define GATE_W 5.0f
 #define DEPTH_FULL 480.0f
-#define BRANCHES 26
-#define BRANCH_SPACING 26.0f
-#define BRANCH_LEN 17.0f
 #define PLAYER_R 0.62f
+/* BRANCHES and the BRANCH_* sizes are not repeated here: they live inside the
+ * slice, and a second copy that disagreed would quietly flood a cave the game
+ * does not have. Everything above this line is outside the slice. */
 
 /* surface_mix() reads the smoothed shock count: a crossed gate pulls the
  * backrooms look in early, which moves rock. Both ends of its range get
@@ -70,16 +85,20 @@ static int *queue;
 
 static int idx(int ix, int iz) { return iz * NX + ix; }
 
-/* The hall's y term is a slab centred on the tunnel; every wall and pillar is
- * y-independent. So the most open y at a given z is the slab's centre, and a
- * 2-D flood there is not an approximation of the 3-D one, it is its ceiling. */
+/* The hall's walls and pillars are y-independent, but the slab it is all cut
+ * out of is not: drop half a metre and the same corridor loses about that much
+ * clearance. So a flood at one height is a slice, and the slice nearest the
+ * centre is the most generous one there is -- a ceiling on walkability, not a
+ * promise. Which is why -y exists. */
+static float g_probe_y = -0.3f;   /* metres below the tunnel centre */
+
 static int walkable(int ix, int iz)
 {
     float cx, cy;
     float x = -XSPAN + ix * CELL;
     float z = -(ZLO + iz * CELL);
     tunnel_centre(z, &cx, &cy);
-    return cave_sdf(x, cy - 0.3f, z) >= PLAYER_R;
+    return cave_sdf(x, cy + g_probe_y, z) >= PLAYER_R;
 }
 
 /* The hall stops at a wall with the door in it, so the last half-metre of the
@@ -127,7 +146,12 @@ static int flood(int *reached_out, int *open_out, int *deepest_out)
 
 int main(int argc, char **argv)
 {
-    int trials = argc > 1 ? atoi(argv[1]) : 40;
+    int a = 1;
+    int exact, field, trials;
+    if (argc > 2 && strcmp(argv[1], "-y") == 0) { g_probe_y = (float)atof(argv[2]); a = 3; }
+    exact = argc > a && strcmp(argv[a], "-s") == 0;
+    field = argc > a + 3 && strcmp(argv[a], "-f") == 0;
+    trials = field ? 1 : exact ? argc - a - 1 : (argc > a ? atoi(argv[a]) : 40);
     int t, blocked = 0;
     double worst_iso = 0.0;
     int worst_seed = -1;
@@ -138,8 +162,9 @@ int main(int argc, char **argv)
     queue = malloc(sizeof(int) * (size_t)NX * NZ);
     if (!pass || !queue) { fprintf(stderr, "out of memory\n"); return 2; }
 
-    printf("grid %%d x %%d at %%.2f m, hall z -%%.0f .. -%%.0f, clearance %%.2f m\n",
-           NX, NZ, CELL, (double)ZLO, (double)ZHI, (double)PLAYER_R);
+    printf("grid %%d x %%d at %%.2f m, hall z -%%.0f .. -%%.0f, clearance %%.2f m,"
+           " probing %%.2f m below centre\n",
+           NX, NZ, CELL, (double)ZLO, (double)ZHI, (double)PLAYER_R, (double)g_probe_y);
 
     for (t = 0; t < trials; t++) {
         static const float shocks[2] = {0.0f, 2.0f};
@@ -149,11 +174,19 @@ int main(int argc, char **argv)
             int reached, open, deepest, ok;
             double iso;
 
-            /* the same rolls new_cave() makes, in the same order */
-            g_rng    = (unsigned)(t * 2654435761u + 12345u);
-            g_seed   = rndf() * 1000.0f;
-            g_wander = 0.80f + rndf() * 0.45f;
-            g_rough  = 0.70f + rndf() * 0.70f;
+            /* the same rolls new_attempt() makes, in the same order */
+            if (field) {
+                g_seed   = (float)atof(argv[a + 1]);
+                g_wander = (float)atof(argv[a + 2]);
+                g_rough  = (float)atof(argv[a + 3]);
+            } else {
+                g_rng    = exact ? (unsigned)strtoul(argv[a + 1 + t], 0, 10)
+                                 : (unsigned)(t * 2654435761u + 12345u);
+                if (!g_rng) g_rng = 1u;
+                g_seed   = rndf() * 1000.0f;
+                g_wander = 0.80f + rndf() * 0.45f;
+                g_rough  = 0.70f + rndf() * 0.70f;
+            }
             g_shockf = shocks[s];
             build_branches();
 
@@ -162,9 +195,11 @@ int main(int argc, char **argv)
             if (iso > worst_iso) { worst_iso = iso; worst_seed = t; }
             if (!ok) {
                 blocked++;
-                printf("  BLOCKED  trial %%d shockf %%.1f  seed %%.3f wander %%.3f rough %%.3f"
+                printf("  BLOCKED  %%s%%s shockf %%.1f  seed %%.3f wander %%.3f rough %%.3f"
                        "  -- flood died at z -%%.1f, door at -%%.1f\n",
-                       t, (double)g_shockf, (double)g_seed,
+                       field ? "field" : exact ? "seed " : "trial ",
+                       field ? "" : exact ? argv[a + 1 + t] : "",
+                       (double)g_shockf, (double)g_seed,
                        (double)g_wander, (double)g_rough,
                        (double)(ZLO + deepest * CELL), (double)(WAKE_Z - 1.6f));
             }
@@ -193,7 +228,7 @@ def slice_field(text):
 
 
 def main(argv):
-    trials = argv[0] if argv else "40"
+    args = argv if argv else ["40"]
     src = HARNESS % {"slice": slice_field(GAME.read_text(encoding="utf-8"))}
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -206,7 +241,7 @@ def main(argv):
         if build.returncode:
             sys.stderr.write(build.stderr)
             return 2
-        return subprocess.run([str(tmp / "mazecheck"), trials]).returncode
+        return subprocess.run([str(tmp / "mazecheck")] + args).returncode
 
 
 if __name__ == "__main__":

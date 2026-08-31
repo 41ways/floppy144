@@ -37,7 +37,7 @@ all: $(TARGET)
 $(TARGET): $(SRC) src/gl33.h src/shaders.h src/game.h src/audio.h
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) $(SRC) -o $@ $(LDFLAGS) $(LIBS)
-	@echo "built $@ -- $$(stat -c%s $@) bytes"
+	@echo "built $@ -- $$(wc -c < $@ | tr -d ' ') bytes"   # stat -c is GNU-only; wc works on the Mac too
 
 debug: CFLAGS := -std=c99 -O0 -g -Wall -Wextra
 debug: LDFLAGS := -mwindows

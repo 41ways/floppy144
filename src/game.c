@@ -143,6 +143,7 @@ static int   g_menu_prev;         /* the state the menu will hand back */
 static const char *g_note;        /* one line, from the other side */
 static float g_note_t;
 static float g_step_acc;          /* metres since the last footfall */
+static int   g_steps;             /* footfalls so far - read by -shot only */
 static float g_pulse;             /* the beat you feel as the door nears */
 static float g_dive;              /* the plunge at gate one */
 static int   g_pings;
@@ -153,9 +154,6 @@ static int   g_wet;              /* stage two: the passage is flooded */
 static float g_vx, g_vy, g_vz;   /* swimming carries momentum */
 static Point *g_motes;
 static GLuint g_movao, g_movbo;
-static Point *g_water;
-static GLuint g_wtvao, g_wtvbo;
-static float g_stroke_next;
 static Point *g_water;
 static GLuint g_wtvao, g_wtvbo;
 static float g_stroke_next;
@@ -594,9 +592,12 @@ static void mon_place(Monster *m, float now)
 /* how many of them are awake in the cave at this depth */
 #define SAFE_DEPTH 14.0f       /* nothing hunts you while you learn to listen */
 
+static int g_calm;             /* -calm: nothing hunts, so a capture survives */
+
 static int mon_target_count(void)
 {
     float k = depth_k(g_pz);
+    if (g_calm) return 0;
     if (-g_pz < SAFE_DEPTH) return 0;
     if (k > 0.72f) return 4;
     if (k > 0.46f) return 3;
@@ -1415,20 +1416,43 @@ static void enter_title(float now)
  * pinned to the screen. Rebuilt only when the text it shows actually changes,
  * so GDI is touched a few times a second at worst. */
 
-#define HUD_MAX 9000
+/* Three lines of 96 px lettering, scattered. Measured on a Mac build: the
+ * plainest screen needs 9,600 points and "STAGE 2  130.0 M  SUBMERGED" needs
+ * 13,200 -- so the old 9,000 truncated the last line appended, the hint, in
+ * every single state. That is why "WASD TO MOVE" was never on screen and
+ * "CLICK TO OPEN" came up sliced in half. Korean glyphs are denser than the
+ * fallback the measurement was taken through, hence the room left over. It
+ * costs 480 KB of RAM and not one byte on disk. */
+#define HUD_MAX 24000
 
 static Point *g_hud;
 static int    g_hud_n;
 static char   g_hud_cache[96];
 
-/* x,y in normalised device coordinates; scale is height in NDC */
-static void hud_line(const char *str, float scale, float cx, float cy, float bright)
+/* x,y in normalised device coordinates; scale is height in NDC.
+ *
+ * align pins which part of the line lands on cx: -1 its left edge, +1 its
+ * right edge, 0 its middle. Centring everything meant the readout's width
+ * decided where it started, so the one line long enough to matter -- the
+ * submerged one -- walked off the edge of the screen. A corner readout should
+ * be measured from its corner. */
+static void hud_line(const char *str, float scale, float cx, float cy,
+                     float bright, int align)
 {
-    int n, i;
+    int   n, i;
+    float lo = 1e9f, hi = -1e9f, off = 0.0f;
     if (!g_text_xy) return;
     n = plat_text_points(str, 96, g_text_xy, TEXT_MAX_PTS);
+    if (align) {
+        for (i = 0; i < n; i++) {
+            float t = g_text_xy[i * 2 + 0];
+            if (t < lo) lo = t;
+            if (t > hi) hi = t;
+        }
+        if (n > 0) off = (align < 0 ? -lo : -hi) * scale;
+    }
     for (i = 0; i < n && g_hud_n < HUD_MAX; i++) {
-        g_hud[g_hud_n].x = cx + g_text_xy[i * 2 + 0] * scale;
+        g_hud[g_hud_n].x = cx + off + g_text_xy[i * 2 + 0] * scale;
         g_hud[g_hud_n].y = cy - g_text_xy[i * 2 + 1] * scale * 1.78f;
         g_hud[g_hud_n].z = 0.0f;
         g_hud[g_hud_n].reveal = 0.0f;
@@ -1448,8 +1472,8 @@ static void hud_build_wake(const char *a, const char *b)
     g_hud_cache[sizeof g_hud_cache - 1] = 0;
 
     g_hud_n = 0;
-    if (a[0]) hud_line(a, 0.150f, 0.0f,  0.10f, 0.85f);
-    if (b[0]) hud_line(b, 0.105f, 0.0f, -0.10f, 0.70f);
+    if (a[0]) hud_line(a, 0.150f, 0.0f,  0.10f, 0.85f, 0);
+    if (b[0]) hud_line(b, 0.105f, 0.0f, -0.10f, 0.70f, 0);
     if (g_hud_n > 0) {
         glBindBuffer(GL_ARRAY_BUFFER, g_hvbo);
         glBufferSubData(GL_ARRAY_BUFFER, 0,
@@ -1466,9 +1490,9 @@ static void hud_build(const char *left, const char *right, const char *hint)
     g_hud_cache[sizeof g_hud_cache - 1] = 0;
 
     g_hud_n = 0;
-    if (left[0])  hud_line(left,  0.135f, -0.68f,  0.86f, 0.78f);
-    if (right[0]) hud_line(right, 0.135f,  0.70f,  0.86f, 0.78f);
-    if (hint[0])  hud_line(hint,  0.130f,  0.00f, -0.74f, 0.66f);
+    if (left[0])  hud_line(left,  0.135f, -0.88f,  0.86f, 0.78f, -1);
+    if (right[0]) hud_line(right, 0.135f,  0.88f,  0.86f, 0.78f,  1);
+    if (hint[0])  hud_line(hint,  0.130f,  0.00f, -0.74f, 0.66f,  0);
 
     if (g_hud_n > 0) {
         glBindBuffer(GL_ARRAY_BUFFER, g_hvbo);
@@ -1995,7 +2019,7 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
         g_hud_n = 0;
         g_hud_cache[0] = 0;
         hud_line(g_menu_sel == 0 ? "> CONTINUE" : "CONTINUE", 0.13f, 0.0f, 0.30f,
-                 g_menu_sel == 0 ? 0.95f : 0.45f);
+                 g_menu_sel == 0 ? 0.95f : 0.45f, 0);
         if (g_menu_mode == 1) {
             int bars = (int)(audio_get_volume() * 10.0f + 0.5f);
             v[0] = 0;
@@ -2003,15 +2027,15 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
             v[10] = 0;
             {   char lbl[64];
                 sprintf(lbl, "VOLUME  %s", v);
-                hud_line(lbl, 0.11f, 0.0f, 0.02f, 0.95f);
+                hud_line(lbl, 0.11f, 0.0f, 0.02f, 0.95f, 0);
             }
-            hud_line("A / D TO ADJUST", 0.07f, 0.0f, -0.20f, 0.5f);
+            hud_line("A / D TO ADJUST", 0.07f, 0.0f, -0.20f, 0.5f, 0);
         } else {
             hud_line(g_menu_sel == 1 ? "> SETTING" : "SETTING", 0.13f, 0.0f, 0.02f,
-                     g_menu_sel == 1 ? 0.95f : 0.45f);
+                     g_menu_sel == 1 ? 0.95f : 0.45f, 0);
         }
         hud_line(g_menu_sel == 2 ? "> EXIT" : "EXIT", 0.13f, 0.0f, -0.44f,
-                 g_menu_sel == 2 ? 0.95f : 0.45f);
+                 g_menu_sel == 2 ? 0.95f : 0.45f, 0);
         if (g_hud_n > 0) {
             glBindBuffer(GL_ARRAY_BUFFER, g_hvbo);
             glBufferSubData(GL_ARRAY_BUFFER, 0,
@@ -2253,7 +2277,7 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
             /* in the hall your feet make the sound hospital floors make */
             if (g_shockf > 0.3f) {
                 g_step_acc += moved;
-                if (g_step_acc > 1.05f) { g_step_acc = 0.0f; audio_step(); }
+                if (g_step_acc > 1.05f) { g_step_acc = 0.0f; audio_step(); g_steps++; }
             }
         }
         g_has_moved = 1;
@@ -2567,6 +2591,15 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
     }
 }
 
+/* -shot only: empty the cave. A scripted walk has no idea it is being
+ * hunted, so without this every long run ends the same way and never gets
+ * far enough to photograph what it was sent to photograph. */
+void game_debug_calm(void)
+{
+    g_calm = 1;
+    g_mon_count = 0;
+}
+
 /* -shot only: drop a spider right in front and wake it, so the thing can be
  * looked at without waiting for one to come along. */
 void game_debug_spider(float now, int type)
@@ -2587,6 +2620,94 @@ void game_debug_spider(float now, int type)
     (void)now;
 }
 
+/* -shot only: steer.
+ *
+ * The harness walks a fixed heading, which is fine in a tunnel and useless in
+ * the hall -- seven metres in it meets a row wall and stands there. This looks
+ * a few metres ahead along a fan of headings, keeps the ones with air in them,
+ * and picks whichever gets nearest the way out. In the hall the way out is the
+ * gap in the next row of wall, which it reads out of the field rather than
+ * finding; in the tunnel it is simply the door.
+ *
+ * What it is for: putting a capture somewhere a fixed heading cannot reach.
+ * What it is NOT: proof the hall can be walked. It only ever goes forward, so
+ * a corner it turns into is a corner it stays in, and in practice it gets a
+ * few rows into the hall before it wedges. Traversal is mazecheck's job, and
+ * for a capture deeper than that, spawn there with -depth. */
+void game_debug_autopilot(float dt)
+{
+    static const float sweep[] = { 0.0f, -0.35f, 0.35f, -0.70f, 0.70f,
+                                  -1.05f, 1.05f, -1.45f, 1.45f, -1.95f,
+                                   1.95f, -2.60f, 2.60f };
+    static float ox, oz, watch, panic, lean;
+    int   n = (int)(sizeof sweep / sizeof sweep[0]);
+    float best = -1e9f, best_yaw = g_yaw, turn, lim;
+    float gx, gz, tx, tz, gl, d;
+    int   i, s;
+
+    if (g_state != ST_PLAY) return;
+
+    /* Where it got to, not how far it walked: circling a pillar at full speed
+     * covers plenty of ground and arrives nowhere. When the last stretch ends
+     * up where it started, stop aiming for a while and just get out. */
+    watch += dt;
+    if (watch > 1.4f) {
+        float net = (float)sqrt((g_px - ox) * (g_px - ox) + (g_pz - oz) * (g_pz - oz));
+        if (net < 1.0f) {
+            if (panic <= 0.0f) lean = (lean > 0.0f) ? -1.0f : 1.0f;
+            panic = 2.6f;
+        }
+        ox = g_px; oz = g_pz; watch = 0.0f;
+    }
+    if (panic > 0.0f) panic -= dt;
+
+    d = -g_pz;
+    if (d > GATE_2 + 6.0f && d < WAKE_Z - 4.0f) {
+        float ri = (float)floor(d / 7.0f) + 1.0f;      /* the wall ahead of us */
+        float wz = ri * 7.0f;
+        if (wz - d < 0.6f) { ri += 1.0f; wz = ri * 7.0f; }
+        gx = tunnel_gapx(ri);
+        /* line up with the gap first, walk through it second: cutting the
+         * corner just means arriving at the wall beside the opening */
+        gz = ((float)fabs(g_px - gx) > 0.7f) ? g_pz : -(wz + 1.4f);
+    } else {
+        tunnel_centre(-WAKE_Z + 4.0f, &gx, &gl);
+        gz = -WAKE_Z + 2.0f;
+    }
+    tx = gx - g_px;
+    tz = gz - g_pz;
+    gl = (float)sqrt(tx * tx + tz * tz);
+    if (gl > 0.001f) { tx /= gl; tz /= gl; }
+
+    for (i = 0; i < n; i++) {
+        float y     = g_yaw + sweep[i];
+        float fx    =  (float)sin(y);
+        float fz    = -(float)cos(y);
+        float reach = 0.0f;
+        float score;
+        for (s = 1; s <= 10; s++) {
+            float t = (float)s * 0.55f;
+            if (cave_sdf(g_px + fx * t, g_py, g_pz + fz * t) < PLAYER_R) break;
+            reach = t;
+        }
+        /* Past a few metres more air ahead is not a better way to go: the hall
+         * is full of long empty rows that lead nowhere. */
+        if (reach > 2.8f) reach = 2.8f;
+        if (panic > 0.0f)
+            score = reach * 1.4f + lean * sweep[i] * 2.5f + (fx * tx + fz * tz) * 0.4f;
+        else
+            score = reach * 0.9f + (fx * tx + fz * tz) * 3.0f
+                  - (float)fabs(sweep[i]) * 0.12f;
+        if (score > best) { best = score; best_yaw = y; }
+    }
+
+    turn = best_yaw - g_yaw;
+    lim  = 2.4f * dt;                    /* a head turns; it does not snap */
+    if (turn >  lim) turn =  lim;
+    if (turn < -lim) turn = -lim;
+    g_yaw += turn;
+}
+
 int   game_point_count(void) { return g_count; }
 float game_depth(void)       { return -g_pz; }
 int   game_lives(void)       { return g_lives; }
@@ -2598,3 +2719,20 @@ float game_px(void)          { return g_px; }
 float game_py(void)          { return g_py; }
 float game_pz(void)          { return g_pz; }
 float game_travelled(void)   { return g_travelled; }
+
+/* The numbers a scripted run needs to prove anything about the back half of
+ * the game. They were a throwaway fork once; keeping them costs a few bytes
+ * and saves rebuilding it every time something in here has to be checked. */
+float game_shockf(void)      { return g_shockf; }
+/* The three rolls that ARE the cave. game_init's seed does not identify it:
+ * the click that starts a run rerolls, so the only way to say which cave a
+ * capture walked -- or to hand it to mazecheck -- is to read them out. */
+void  game_cave(float *seed, float *wander, float *rough)
+{ *seed = g_seed; *wander = g_wander; *rough = g_rough; }
+/* how well the player fits where they are standing: PLAYER_R or more is
+ * clear of the rock, less means partly inside it */
+float game_fit(void)         { return cave_sdf(g_px, g_py, g_pz); }
+float game_pulse(void)       { return g_pulse; }
+float game_note_t(void)      { return g_note_t; }
+int   game_event(void)       { return g_ev; }
+int   game_steps(void)       { return g_steps; }

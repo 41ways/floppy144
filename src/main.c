@@ -208,7 +208,11 @@ int plat_text_points(const char *str, int px, float *out_xy, int max_pts)
     HGDIOBJ    oldb;
     unsigned  *p;
     RECT       r;
-    const int  W = 1024, H = 256;
+    /* Wide enough for the longest line the game has. At 1024 the readout's
+     * "STAGE 2  130.0 M  SUBMERGED" ran off both ends of the bitmap and lost
+     * a letter at each end on screen. The divisor below stays 256 so nothing
+     * else changes size. */
+    const int  W = 2048, H = 256;
     int        n = 0, x, y;
 
     if (!dc) return 0;
@@ -246,8 +250,8 @@ int plat_text_points(const char *str, int px, float *out_xy, int max_pts)
     for (y = 0; y < H && n < max_pts; y += 2)
         for (x = 0; x < W && n < max_pts; x += 2)
             if ((p[y * W + x] & 0xFFu) > 110u) {
-                out_xy[n * 2 + 0] = ((float)x - W * 0.5f) / (W * 0.25f);
-                out_xy[n * 2 + 1] = ((float)y - H * 0.5f) / (W * 0.25f);
+                out_xy[n * 2 + 0] = ((float)x - W * 0.5f) / 256.0f;
+                out_xy[n * 2 + 1] = ((float)y - H * 0.5f) / 256.0f;
                 n++;
             }
 
@@ -289,6 +293,13 @@ static void save_rgb(const char *path, int w, int h)
     unsigned char *px = (unsigned char *)malloc((size_t)w * h * 3);
     FILE *f;
     if (!px) return;
+    /* A capture reads the back buffer directly, so it has to wait for the
+     * frame to actually be there. Without this a light frame -- the title is
+     * a clear and a few thousand points -- came back solid black while a busy
+     * one came back fine, which looks exactly like a rendering bug and is not
+     * one. glReadPixels is supposed to flush; under Wine on macOS it does not
+     * finish the job by itself. */
+    glFinish();
     glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, px);
     f = fopen(path, "wb");
     if (f) {
@@ -316,6 +327,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     float  title_timer = 0.0f;
     /* -shot <file> <frame> [pingframe]: run a scripted session, save, quit */
     char   shot_path[260]; int shot_at = 0, shot_ping = 3, frame = 0, shot_spider = -1;
+    int    shot_auto = 0;     /* -auto: let the scripted walker steer */
+    int    shot_calm = 0;     /* -calm: and send nothing after it */
     float  start_depth = START_DEPTH;
     shot_path[0] = 0;
 
@@ -354,6 +367,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
         sscanf(p, "%259s %d %d %d", shot_path, &shot_at, &shot_ping, &shot_spider);
         if (shot_at <= 0) shot_at = 70;
     }
+    if (cmd && strstr(cmd, "-auto")) shot_auto = 1;
+    if (cmd && strstr(cmd, "-calm")) shot_calm = 1;
 
     ZeroMemory(&wc, sizeof wc);
     wc.style         = CS_OWNDC | CS_HREDRAW | CS_VREDRAW;
@@ -441,6 +456,13 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
               start_depth);
 
     ShowWindow(hwnd, g_headless ? SW_SHOWNOACTIVATE : SW_SHOW);
+    if (g_headless)
+        /* Off the side of the desktop is not far enough: a window manager
+         * that keeps it on screen anyway still puts it over whatever the
+         * machine is being used for. Send it to the bottom of the stack as
+         * well, so it sits under every real window instead of on top. */
+        SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     glViewport(0, 0, g_width, g_height);
 
     QueryPerformanceFrequency(&freq);
@@ -480,6 +502,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
         g_enter  = 0;
         read_mouse(hwnd, &in.mdx, &in.mdy);
 
+        if (shot_path[0] && shot_calm && frame == 1) game_debug_calm();
         if (shot_path[0] && shot_spider >= 0 && frame == 30)
             game_debug_spider(now, shot_spider);
 
@@ -493,6 +516,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
                    && ((frame == 2) || (shot_ping > 0 && frame > 2
                                        && frame < shot_at - 300
                                        && (frame % shot_ping) == 0));
+            if (shot_auto) game_debug_autopilot(dt);
         }
 
         game_frame(&in, dt, now, g_width, g_height);
@@ -500,14 +524,31 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
         if (game_quit()) g_running = 0;
 
         if (shot_path[0]) {
+            /* Which cave this was. It is not the seed on the command line --
+               the click that starts a run rerolls -- and without these three
+               numbers a capture cannot be reproduced or checked. */
+            if (frame == 10) {
+                FILE *lg = fopen("shotlog.txt", "a");
+                float cs, cw, cr;
+                game_cave(&cs, &cw, &cr);
+                if (lg) {
+                    fprintf(lg, "cave  seed %.3f  wander %.3f  rough %.3f\n", cs, cw, cr);
+                    fclose(lg);
+                }
+            }
             /* a capture that cannot report the state it captured is half a
                tool, so the numbers go beside the pixels */
             if ((frame % 20) == 0) {
                 FILE *lg = fopen("shotlog.txt", "a");
                 if (lg) {
-                    fprintf(lg, "frame %4d  state %d  pos %7.2f %6.2f %7.2f  travelled %6.2f\n",
+                    fprintf(lg, "frame %4d  state %d  pos %7.2f %6.2f %7.2f  "
+                                "travelled %6.2f  lives %d  shockf %4.2f  ev %d  "
+                                "pulse %4.2f  note %4.2f  steps %3d  fit %5.2f  pts %7d\n",
                             frame, game_state(), game_px(), game_py(),
-                            game_pz(), game_travelled());
+                            game_pz(), game_travelled(), game_lives(),
+                            game_shockf(), game_event(), game_pulse(),
+                            game_note_t(), game_steps(), game_fit(),
+                            game_point_count());
                     fclose(lg);
                 }
             }
