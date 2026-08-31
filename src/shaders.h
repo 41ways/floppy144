@@ -468,6 +468,31 @@ static const char *CAVE_FS =
 "  alb = mix(alb, vec3(0.30,0.34,0.38), uWet*0.55);\n"
 /* built surfaces are pale and even; the grain fades with the rock */
 "  alb = mix(alb, vec3(0.84, 0.79, 0.55), uRoom * 0.9);\n"
+/* The sign over the door -- the one saturated thing in the game. Down here
+   every surface is the same pale beige and there is nothing to walk toward;
+   this says the way out is a real place, and gives the last stretch of the
+   hall a direction. Green, because that is what the sign over a door is. */
+"  vec3 sign_col = vec3(0.0);\n"
+"  float sign_m  = 0.0;\n"
+"  if (uRoad < 0.5 && uRoom > 0.3 && p.z < -523.9) {\n"
+"    vec2 sc = centre(p.z);\n"
+"    vec2 q  = vec2(p.x - sc.x, p.y - sc.y - 0.95);\n"
+"    if (abs(q.x) < 0.55 && abs(q.y) < 0.15) {\n"
+/* a figure walking, and an arrow saying which way: pale on green, the way
+   the sign over a door is. It is lit from inside, so it covers the wall
+   rather than adding to it -- added, the beige leaked through and took the
+   colour out of the only coloured thing in the game. */
+"      float head = step(length(q - vec2(-0.27, 0.070)), 0.029);\n"
+"      float body = step(abs(q.x + 0.27), 0.026) * step(abs(q.y + 0.004), 0.060);\n"
+"      float legs = step(abs(abs(q.x + 0.27) - 0.034), 0.019)\n"
+"                 * step(abs(q.y + 0.088), 0.030);\n"
+"      float arrw = step(0.14, q.x) * step(q.x, 0.36)\n"
+"                 * step(abs(q.y), 0.058 * (1.0 - (q.x - 0.14) / 0.22));\n"
+"      float fig  = clamp(head + body + legs + arrw, 0.0, 1.0);\n"
+"      sign_col = mix(vec3(0.02, 2.20, 0.16), vec3(2.20, 2.40, 2.20), fig);\n"
+"      sign_m   = uRoom;\n"
+"    }\n"
+"  }\n"
 /* A corridor reads because its surfaces do not share a value: the ceiling
    carries the light, the walls take less of it, the floor least of all.
    Lit only by panels overhead, every plane landed on the same beige and the
@@ -533,7 +558,11 @@ static const char *CAVE_FS =
    and the whole frame flattens into one sheet of beige. */
 "  float fog = exp(-t * (0.075 - 0.03*uLight + 0.022*uRoom));\n"
 "  col = mix(mix(vec3(0.010,0.012,0.018) + warm*0.045*uLight,\n"
-"                vec3(0.66, 0.63, 0.55), uRoom), col, fog);\n"
+"                vec3(0.66, 0.63, 0.55), uRoom), col, fog);\n"/* The sign takes some of the haze and not all of it. Fogged like a wall it
+   came out the same mint as everything else, and a sign that has gone the
+   colour of the corridor is not a sign -- it is meant to be the one thing
+   down here you can pick out from the far end. */
+"  col = mix(col, sign_col, sign_m * mix(0.55, 1.0, fog));\n"
 "  col = col / (col + vec3(0.9));\n"
 "  col = pow(max(col, vec3(0.0)), vec3(0.4545));\n"
 "  col += vec3(1.0, 0.98, 0.95) * uPulse * 0.10 * uRoom;\n"
