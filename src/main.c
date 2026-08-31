@@ -329,6 +329,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     char   shot_path[260]; int shot_at = 0, shot_ping = 3, frame = 0, shot_spider = -1;
     int    shot_auto = 0;     /* -auto: let the scripted walker steer */
     int    shot_calm = 0;     /* -calm: and send nothing after it */
+    int    shot_menu = 0;     /* -menu: rehearse the pause menu */
+    int    shot_enter = 0;    /* -enter N: press Enter once, at frame N */
     float  start_depth = START_DEPTH;
     shot_path[0] = 0;
 
@@ -369,6 +371,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     }
     if (cmd && strstr(cmd, "-auto")) shot_auto = 1;
     if (cmd && strstr(cmd, "-calm")) shot_calm = 1;
+    if (cmd && strstr(cmd, "-menu")) shot_menu = 1;
+    if (cmd && strstr(cmd, "-enter")) sscanf(strstr(cmd, "-enter") + 6, "%d", &shot_enter);
 
     ZeroMemory(&wc, sizeof wc);
     wc.style         = CS_OWNDC | CS_HREDRAW | CS_VREDRAW;
@@ -517,6 +521,23 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
                                        && frame < shot_at - 300
                                        && (frame % shot_ping) == 0));
             if (shot_auto) game_debug_autopilot(dt);
+
+            /* The pause menu is the one screen a scripted run could not get
+             * to: it opens on Esc and answers to keys nothing was sending.
+             * This rehearses it -- open, then one step down the list every
+             * forty frames -- so it can be photographed and read back with
+             * no keyboard in the room. A click counts as Enter in there, so
+             * the ping that starts the run is the last one it gets. */
+            if (shot_menu) {
+                in.fwd   = 0;
+                in.ping  = (frame == 2);
+                in.menu  = (frame == 60);
+                in.back  = (frame > 60 && (frame % 40) == 0);
+                in.enter = (shot_enter > 0 && frame == shot_enter);
+                /* held afterwards, which only the volume slider listens to */
+                in.right = (shot_enter > 0 && frame > shot_enter + 10
+                                           && frame < shot_enter + 70);
+            }
         }
 
         game_frame(&in, dt, now, g_width, g_height);
@@ -543,12 +564,14 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
                 if (lg) {
                     fprintf(lg, "frame %4d  state %d  pos %7.2f %6.2f %7.2f  "
                                 "travelled %6.2f  lives %d  shockf %4.2f  ev %d  "
-                                "pulse %4.2f  note %4.2f  steps %3d  fit %5.2f  pts %7d\n",
+                                "pulse %4.2f  note %4.2f  steps %3d  fit %5.2f  pts %7d"
+                                "  menu %d/%d  vol %4.2f\n",
                             frame, game_state(), game_px(), game_py(),
                             game_pz(), game_travelled(), game_lives(),
                             game_shockf(), game_event(), game_pulse(),
                             game_note_t(), game_steps(), game_fit(),
-                            game_point_count());
+                            game_point_count(), game_menu_sel(),
+                            game_menu_mode(), audio_get_volume());
                     fclose(lg);
                 }
             }

@@ -5,7 +5,7 @@ dist/
 *.pdb
 .vscode/
 .idea/
-shotlog.txt
+shotlog*.txt
 faillog.txt
 *.raw
 *.png

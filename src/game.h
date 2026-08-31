@@ -36,6 +36,8 @@ float game_pulse(void);      /* the guide beat, 1.0 on the frame it lands */
 float game_note_t(void);     /* seconds the line from the other side has left */
 int   game_event(void);      /* 0 calm, 1 horde closing, 2 aftermath */
 int   game_steps(void);      /* footfalls since the run began */
+int   game_menu_sel(void);   /* pause menu: 0 continue, 1 setting, 2 exit */
+int   game_menu_mode(void);  /* 1 while the volume slider has the keys */
 void  game_cave(float *seed, float *wander, float *rough);  /* which cave this is */
 float game_fit(void);        /* clearance where the player stands, vs 0.62 */
 void  game_debug_spider(float now, int type);
