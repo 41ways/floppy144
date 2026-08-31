@@ -1563,17 +1563,31 @@ static void title_line(const char *str, int px, float scale, float yoff,
         float x = g_px + g_text_xy[i * 2 + 0] * scale;
         float y = g_py - g_text_xy[i * 2 + 1] * scale + yoff;   /* bitmaps run down */
         float z = g_pz - 5.0f;
-        /* No wavefront on the title. It is simply lit, and the whole word
-         * swells and settles together - a monitor breathing rather than one
-         * being switched on over and over. Brightness comes from uBase. */
-        (void)delay;
+        /* The word never goes dark and comes back on -- that read as the game
+         * restarting. It sits at uBase and a wavefront crosses it, so the
+         * title is the mechanic: a sounding sweeps left to right and the
+         * letters brighten as it reaches them. delay staggers the lines so
+         * the sweep arrives at each in turn. */
         g_pts[g_count].x = x;
         g_pts[g_count].y = y;
         g_pts[g_count].z = z;
-        g_pts[g_count].reveal = now - 1000.0f;
+        g_pts[g_count].reveal = now + delay;
         g_pts[g_count].gain   = 1.0f;
         g_count++;
     }
+}
+
+/* Re-time the sweep so it crosses the word again. Cheaper than rebuilding the
+ * title -- the letters do not move, only the moment each is reached. */
+static void title_sweep(float now)
+{
+    int i;
+    for (i = 0; i < g_count; i++)
+        g_pts[i].reveal = now + (g_pts[i].x - g_px + 3.5f) * 0.125f;
+    glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
+    glBufferSubData(GL_ARRAY_BUFFER, 0,
+                    (GLsizeiptr)(g_count * (int)sizeof(Point)), g_pts);
+    g_title_pulse = now + 4.4f;
 }
 
 static void enter_title(float now)
@@ -1584,13 +1598,11 @@ static void enter_title(float now)
     g_yaw = 0.0f; g_pitch = 0.0f;
     g_state = ST_TITLE;
     g_count = 0;
-    title_line("SOUNDING",       150, 2.05f, 0.55f, 0.30f, now);
-    title_line("CLICK TO START",  40, 2.05f, -1.15f, 1.35f, now);
+    title_line("SOUNDING",             150, 2.05f,  0.55f, 0.30f, now);
+    title_line("EVERY CLICK IS A SOUNDING", 30, 2.05f, -0.64f, 0.95f, now);
+    title_line("CLICK TO START",        40, 2.05f, -1.35f, 1.35f, now);
 
-    glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
-    glBufferSubData(GL_ARRAY_BUFFER, 0,
-                    (GLsizeiptr)(g_count * (int)sizeof(Point)), g_pts);
-    g_title_pulse = now + 2.9f;      /* let the wave wash over it again */
+    title_sweep(now);
 }
 
 /* --- the readout --------------------------------------------------------
@@ -2340,6 +2352,7 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
         }
         glClearColor(0.008f, 0.012f, 0.020f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
+        if (now > g_title_pulse) title_sweep(now);
         if (g_count > 0) {
             mat4_persp(proj, 1.30f,
                        (float)width / (height > 0 ? (float)height : 1.0f),
@@ -2355,11 +2368,19 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
                  * seconds, then back to where it was */
                 float ph  = (float)fmod(now * 0.345, 1.0);
                 float sw  = (float)exp(-pow((ph - 0.5) / 0.20, 2.0));
-                glUniform1f(u_base, 0.30f + 0.62f * sw);
+                /* the floor is low so the sweep has something to be brighter
+                 * than: at 0.30 the resting word already clipped white and
+                 * the wave crossing it did not read */
+                glUniform1f(u_base, 0.17f + 0.55f * sw);
                 glUniform1f(u_grey, 0.0f);
             }
             glUniform1f(u_monster, 0.0f);
-            glUniform1f(u_persist, 1.0f);
+            /* 0, not 1: with persistence on, every letter sat at the 0.95
+             * a remembered surface gets, which is above anything uBase or the
+             * wavefront could add -- so the swell this code has always claimed
+             * to do has never once been visible. Off, the word is exactly what
+             * uBase says it is, and the sweep can be seen crossing it. */
+            glUniform1f(u_persist, 0.0f);
             glBindVertexArray(g_vao);
             glDrawArrays(GL_POINTS, 0, g_count);
         }
@@ -2669,7 +2690,8 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
     glUniform1f(u_base, 0.0f);
 
     {   /* the rock itself, once there is enough of the world to light */
-        float sm = surface_mix(g_pz);
+        float sm  = surface_mix(g_pz);
+        float lit = 0.0f;
         if (sm > 0.004f) {
             float bra[48], brb[48];
             int b;
@@ -2691,7 +2713,8 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
                  * Between soundings the dark still rules until the end. */
                 float ls = smoothstep01(1.35f, 2.0f, g_shockf);
                 float dim = sm * 0.05f + smoothstep01(0.4f, 1.1f, g_shockf) * 0.10f;
-                glUniform1f(c_light, dim > ls ? dim : ls);
+                lit = dim > ls ? dim : ls;
+                glUniform1f(c_light, lit);
             }
             glUniform1f(c_wet, g_wet ? 1.0f : 0.0f);
             {   /* each shock hardens the rock into hospital */
@@ -2714,8 +2737,14 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
         glUniform1f(u_flat, 0.0f);
         glUniform1f(u_base, 0.0f);
         glUniform1f(u_ink, 0.0f);
-        /* and the points step back as it arrives */
-        glUniform1f(u_fade, 1.0f - sm * 0.82f);
+        /* and the points step back as it arrives. Twice over: once for the
+         * rock resolving, and again for the lights coming on. Under the ward
+         * lights a sounding returns a hundred thousand points onto a wall you
+         * can already see, and they read as dirt on the lens rather than as a
+         * map. Letting them go is the whole turn of the game -- the instrument
+         * you have leaned on for eight minutes stops being what you see with,
+         * because there was never anything to sound. */
+        glUniform1f(u_fade, (1.0f - sm * 0.82f) * (1.0f - lit * 0.76f));
         {   /* grey rises with depth, but a crossed gate pulls it ahead, so
              * the change is felt at the boundary and not only along the way */
             float gd = smoothstep01(GATE_2, GATE_3 + 16.0f, -g_pz);
@@ -2755,6 +2784,10 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
         glDrawArrays(GL_POINTS, 0, g_wcount);
     }
 
+    /* Everything the sounding drew dims under the lights; the thing walking
+     * towards you does not. In the ward it is the only thing on the screen
+     * that still has to be read off a point cloud, which is worse. */
+    glUniform1f(u_fade, 1.0f);
     glUniform1f(u_persist, 0.0f);
     glBindVertexArray(g_mvao);
     for (i = 0; i < g_mon_count; i++) {

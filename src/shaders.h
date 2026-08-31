@@ -358,7 +358,11 @@ static const char *CAVE_FS =
 "  float G[4] = float[4](120.0, 240.0, 360.0, 480.0);\n"
 "  for (int i = 0; i < 4; i++){ float t = abs(d - G[i]);\n"
 "    if (t < best) { best = t; k = i; } }\n"
-"  float R[4] = float[4](15.0, 9.5, 9.5, 11.0);\n"
+/* R[0] is 4 and not 15 because the first threshold stopped being a wider
+   piece of cave: it is a room, carved below. The C field was changed and
+   this one was not, so for a while the sounding drew a square room with a
+   pool in it while the rock drawn behind it was a round chamber. */
+"  float R[4] = float[4]( 4.0, 9.5, 9.5, 11.0);\n"
 "  float W[4] = float[4]( 8.0, 5.0, 5.0,  5.0);\n"
 "  if (best > W[k]*4.0) return 0.0;\n"
 "  dz = d - G[k]; return R[k] * exp(-(dz*dz)/(2.0*W[k]*W[k])); }\n"
@@ -373,6 +377,18 @@ static const char *CAVE_FS =
 "            + 1.15*uRough*fbm2(atan(d2.y, d2.x)*1.6, p.z*0.42 + uSeed)\n"
 "            + gate(p.z);\n"
 "  float m = rad - length(d2);\n"
+/* The first threshold, mirrored from cave_sdf: flat floor, flat walls, flat
+   ceiling, and a rectangular pool cut into the middle of it. Blended in over
+   seven metres at each end so the passage runs into the doorways. */
+"  { float dep = -p.z, rd = abs(dep - 125.0);\n"
+"    if (rd < 21.0) {\n"
+"      float fl   = c.y - 1.05;\n"
+"      float pool = min(min(8.5 - abs(d2.x), 8.0 - rd), p.y - (fl - 7.0));\n"
+"      float flor = max(p.y - fl, pool);\n"
+"      float room = min(min(12.0 - abs(d2.x), (c.y + 3.2) - p.y),\n"
+"                       min(17.0 - rd, flor));\n"
+"      m = mix(m, room, 1.0 - smoothstep(13.0, 20.0, rd));\n"
+"    } }\n"
 /* Toward the end the tunnel forgets how to be a tunnel. A box corridor
    with the same axis takes over, corners first: the cave becomes
    architecture around you before there is a room. */
