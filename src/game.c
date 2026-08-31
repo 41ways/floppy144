@@ -1006,11 +1006,18 @@ static float wave_speed(void)
     return g_wet ? WAVE_SPEED_WET : WAVE_SPEED;
 }
 
-/* 1 inside the room at the first threshold, 0 out in the cave. */
-static float room1_k(float z)
+/* How much of the sounding's boost applies here.
+ *
+ * This started out as the room's own shape and that was wrong: the room is
+ * symmetric about its middle, so its far edge sits six metres past the far
+ * rim of the pool, and measured, the brightest ping in the whole game came
+ * back at 140 m -- out in open water, swimming, which is the one place it
+ * was never meant to be. It runs in over the dry floor and stops at the
+ * rim: full from 108 to 132, gone by 139. */
+static float room1_ping_k(float z)
 {
-    float rd = (float)fabs(-z - (GATE_1 + 5.0f));
-    return 1.0f - smoothstep01(13.0f, 20.0f, rd);
+    float d = -z;
+    return smoothstep01(102.0f, 108.0f, d) * (1.0f - smoothstep01(132.0f, 139.0f, d));
 }
 
 static float ping_reach(void)
@@ -1020,7 +1027,7 @@ static float ping_reach(void)
      * and one sounding in it comes back with the whole place. That is the
      * only room in the game you get to see all of at once, which is why it
      * is where the game shows you what a sounding is actually for. */
-    return (26.0f - 11.0f * depth_k(g_pz)) * (1.0f + 0.62f * room1_k(g_pz));
+    return (26.0f - 11.0f * depth_k(g_pz)) * (1.0f + 0.62f * room1_ping_k(g_pz));
 }
 
 /* Did the beam actually land on it? Being behind you, or around a corner,
@@ -1136,7 +1143,7 @@ static void ping_begin(float now, const float *f, const float *r, const float *u
     g_ping_oy = g_py + f[1] * MUZZLE_FWD - MUZZLE_DROP;
     g_ping_oz = g_pz + f[2] * MUZZLE_FWD;
     g_ping_t0 = now;
-    g_ping_room = room1_k(g_pz);
+    g_ping_room = room1_ping_k(g_pz);
     g_ping_i  = 0;
     g_ping_busy = 1;
     g_wcount = 0;                       /* the previous wave has passed */
