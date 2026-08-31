@@ -1006,9 +1006,21 @@ static float wave_speed(void)
     return g_wet ? WAVE_SPEED_WET : WAVE_SPEED;
 }
 
+/* 1 inside the room at the first threshold, 0 out in the cave. */
+static float room1_k(float z)
+{
+    float rd = (float)fabs(-z - (GATE_1 + 5.0f));
+    return 1.0f - smoothstep01(13.0f, 20.0f, rd);
+}
+
 static float ping_reach(void)
 {
-    return 26.0f - 11.0f * depth_k(g_pz);   /* rock swallows more, deeper */
+    /* Rock swallows it, and more of it the deeper you are. The room at the
+     * first threshold is not rock: it is tiled and flat and full of water,
+     * and one sounding in it comes back with the whole place. That is the
+     * only room in the game you get to see all of at once, which is why it
+     * is where the game shows you what a sounding is actually for. */
+    return (26.0f - 11.0f * depth_k(g_pz)) * (1.0f + 0.62f * room1_k(g_pz));
 }
 
 /* Did the beam actually land on it? Being behind you, or around a corner,
@@ -1108,6 +1120,7 @@ static void mon_lit_by(const float *f, float reach, float now)
  * happened to be computed. */
 
 static int   g_ping_busy, g_ping_i;
+static float g_ping_room;      /* how much of the first room this ping is in */
 static float g_ping_ox, g_ping_oy, g_ping_oz, g_ping_t0;
 static float g_pf[3], g_pr[3], g_pu[3];
 
@@ -1123,6 +1136,7 @@ static void ping_begin(float now, const float *f, const float *r, const float *u
     g_ping_oy = g_py + f[1] * MUZZLE_FWD - MUZZLE_DROP;
     g_ping_oz = g_pz + f[2] * MUZZLE_FWD;
     g_ping_t0 = now;
+    g_ping_room = room1_k(g_pz);
     g_ping_i  = 0;
     g_ping_busy = 1;
     g_wcount = 0;                       /* the previous wave has passed */
@@ -1223,9 +1237,17 @@ static void ping_work(void)
                 t2[1] = n[2]*t1[0] - n[0]*t1[2];
                 t2[2] = n[0]*t1[1] - n[1]*t1[0];
 
-                for (m = 0; m < MARK_SPLASH && g_count < MAX_POINTS; m++) {
-                    float a = (hash1((float)i * 3.7f + (float)b * 11.0f + (float)m * 2.3f) - 0.5f) * 2.0f * SPLASH_R;
-                    float c = (hash1((float)i * 5.1f + (float)b * 7.0f  + (float)m * 3.9f) - 0.5f) * 2.0f * SPLASH_R;
+                /* A wide room takes fewer marks than a tunnel does, not
+                 * more: the rays fan out and every impact is metres from the
+                 * last one, so five specks apiece leaves it looking like fog.
+                 * The one room in the game worth seeing all of gets a bigger,
+                 * denser splash, and a sounding in it comes back with walls
+                 * instead of a scatter. */
+                int   nmark = MARK_SPLASH + (int)(g_ping_room * 11.0f);
+                float srad  = SPLASH_R * (1.0f + g_ping_room * 1.7f);
+                for (m = 0; m < nmark && g_count < MAX_POINTS; m++) {
+                    float a = (hash1((float)i * 3.7f + (float)b * 11.0f + (float)m * 2.3f) - 0.5f) * 2.0f * srad;
+                    float c = (hash1((float)i * 5.1f + (float)b * 7.0f  + (float)m * 3.9f) - 0.5f) * 2.0f * srad;
                     if (m == 0) { a = 0.0f; c = 0.0f; }      /* one dead on the hit */
                     g_pts[g_count].x = ox + t1[0]*a + t2[0]*c;
                     g_pts[g_count].y = oy + t1[1]*a + t2[1]*c;
@@ -1234,14 +1256,16 @@ static void ping_work(void)
                     /* The mark keeps more of itself than the bullet does: a
                      * tired ricochet still proves a wall is there, and the
                      * cave only takes shape if late hits stay readable. */
-                    g_pts[g_count].gain = 0.42f + 0.58f * gain;
+                    g_pts[g_count].gain = (0.42f + 0.58f * gain)
+                                        * (1.0f + 0.35f * g_ping_room);
                     g_count++;
                     added++;
                 }
             }
 
             /* the air wears it down as it goes */
-            gain *= (float)exp(-GAIN_PER_METRE * t);
+            /* and the air in it costs the sound almost nothing */
+            gain *= (float)exp(-GAIN_PER_METRE * t * (1.0f - 0.62f * g_ping_room));
             if (gain < GAIN_FLOOR || travelled >= MAX_TRAVEL * 0.98f) break;
 
             dot = dx * n[0] + dy * n[1] + dz * n[2];   /* negative going in */
@@ -1622,6 +1646,71 @@ static void hud_build_wake(const char *a, const char *b)
         glBufferSubData(GL_ARRAY_BUFFER, 0,
                         (GLsizeiptr)(g_hud_n * (int)sizeof(Point)), g_hud);
     }
+}
+
+/* Stage by stage, the body you left behind answers.
+ *
+ * The first voice in the first side passage asks you to move your hand.
+ * This is the hand. At the first threshold the little finger goes and that
+ * is the whole of it; the thumb does not join until the last one, and by
+ * then it is coming up off the sheet. Nobody says anything about it -- it
+ * is at the bottom of the screen for three seconds, where your own hand
+ * would be, and either you notice or you do not.
+ *
+ * wake is 0..1 across the four thresholds; t is seconds since the card. */
+static void hud_hand(float wake, float t)
+{
+    /* thumb, then the four, so index 4 is the little finger */
+    static const float FX[5] = { -0.250f, -0.092f,  0.051f,  0.186f,  0.300f };
+    static const float FL[5] = {  0.169f,  0.270f,  0.305f,  0.265f,  0.186f };
+    const float cx = 0.40f, cy = -0.74f;
+    int   fi, k;
+
+    /* The back of a hand, lying over. Everything else on this screen is
+     * made of thousands of points; two hundred read as dust rather than as
+     * a hand, so this is drawn at the density of the lettering beside it. */
+    for (k = 0; k < 900 && g_hud_n < HUD_MAX; k++) {
+        float a = hash1((float)k * 1.71f + 3.0f) * 6.2831853f;
+        float r = (float)sqrt(hash1((float)k * 2.93f + 1.0f)) * 0.173f;
+        g_hud[g_hud_n].x = cx + (float)cos(a) * r * 1.25f;
+        g_hud[g_hud_n].y = cy + (float)sin(a) * r * 0.78f;
+        g_hud[g_hud_n].z = 0.0f;
+        g_hud[g_hud_n].reveal = 0.0f;
+        g_hud[g_hud_n].gain = 0.80f;
+        g_hud_n++;
+    }
+    for (fi = 0; fi < 5; fi++) {
+        /* the little one first; the thumb is last to have anything in it */
+        float own = wake * 5.0f - (float)(4 - fi);
+        float ph, tw, amp;
+        if (own < 0.0f) own = 0.0f;
+        if (own > 1.0f) own = 1.0f;
+        /* involuntary: fast, small, and over before you are sure of it */
+        ph  = t * 8.5f - (float)(4 - fi) * 0.55f;   /* it runs down the hand */
+        tw  = (ph > 0.0f) ? (float)sin(ph) * (float)exp(-ph * 0.50f) : 0.0f;
+        amp = tw * own * 0.135f;
+        for (k = 0; k <= 70 && g_hud_n < HUD_MAX; k++) {
+            float u    = (float)k / 70.0f;
+            float bend = amp * u * u;
+            float bx   = cx + FX[fi] * (1.0f - 0.22f * u) + bend * 0.40f;
+            float by   = cy + 0.07f + u * FL[fi] + bend;
+            int   q;
+            for (q = 0; q < 5 && g_hud_n < HUD_MAX; q++) {
+                float h  = (float)(fi * 173 + k * 7 + q) * 1.37f;
+                float aa = hash1(h) * 6.2831853f;
+                float rr = (float)sqrt(hash1(h + 2.1f)) * 0.030f * (1.0f - 0.35f * u);
+                g_hud[g_hud_n].x = bx + (float)cos(aa) * rr;
+                g_hud[g_hud_n].y = by + (float)sin(aa) * rr;
+                g_hud[g_hud_n].z = 0.0f;
+                g_hud[g_hud_n].reveal = 0.0f;
+                g_hud[g_hud_n].gain = 0.72f + 0.55f * own;
+                g_hud_n++;
+            }
+        }
+    }
+    glBindBuffer(GL_ARRAY_BUFFER, g_hvbo);
+    glBufferSubData(GL_ARRAY_BUFFER, 0,
+                    (GLsizeiptr)(g_hud_n * (int)sizeof(Point)), g_hud);
 }
 
 static void hud_build(const char *left, const char *right, const char *hint)
@@ -2677,7 +2766,13 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
         if (st < 0) st = 0; if (st > 4) st = 4;
         sprintf(big, "STAGE %d", st + 1);
         hud_build_wake(big, (g_back > 0.0f) ? "다시 내려간다" : NAME[st]);
-        if (g_gate_t > 0.0f) g_gate_t -= dt;
+        if (g_gate_t > 0.0f) {
+            /* the card is a still picture; the hand is not, so it has to be
+               rebuilt every frame rather than served from the cache */
+            g_hud_cache[0] = 0;
+            hud_hand((float)st * 0.25f, 2.8f - g_gate_t);
+            g_gate_t -= dt;
+        }
     } else {   /* the readout */
         char left[40], right[40];
         const char *hint = (g_note_t > 0.0f) ? g_note
