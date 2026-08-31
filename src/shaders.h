@@ -55,7 +55,7 @@ static const char *POINT_VS =
    a metre wide -- at the same size that is fifty times over the same pixels,
    and every one of them came back as a solid white blot with no legs, no head
    and no hollow under it. Thinner points give the density back as shape. */
-"  if (uMonster > 0.5) gl_PointSize = clamp(90.0 / max(clip.w, 0.25), 1.6, 2.6);\n"
+"  if (uMonster > 0.5 && uMonster < 3.5) gl_PointSize = clamp(90.0 / max(clip.w, 0.25), 1.6, 2.6);\n"
 "}\n";
 
 static const char *POINT_FS =
@@ -80,7 +80,11 @@ static const char *POINT_FS =
 /* the thing does not scatter like rock - it comes back red, and brighter */
 /* uMonster carries which kind: 1 stalker, 2 rusher, 3 listener */
 "  if (uMonster > 0.5) {\n"
-"    vec3 mc = uMonster < 1.5 ? vec3(1.00, 0.42, 0.20)\n"
+/* Aqua, not cyan. The far end of the distance palette is already a deep
+   blue, and a blue-leaning water read as more of the same; the green
+   is what nothing else in the game has. */
+"    vec3 mc = uMonster > 3.5 ? vec3(0.10, 1.00, 0.62)   // water\n"
+"            : uMonster < 1.5 ? vec3(1.00, 0.42, 0.20)\n"
 "            : uMonster < 2.5 ? vec3(1.00, 0.07, 0.04)\n"
 "            : vec3(0.58, 0.04, 0.30);\n"
 "    c = mc;\n"
@@ -88,7 +92,8 @@ static const char *POINT_FS =
 "  float a = vBright * exp(-vDist * 0.055);\n"
 /* the rock under your nose is already known - let the distance read */
 "  a *= mix(0.88 + 0.12 * smoothstep(0.5, 4.0, vDist), 1.0, uFlat);\n"
-"  a = mix(a, min(a * 2.2, 1.0), uMonster);\n"
+/* the things come back brighter than rock; water does not, it glints */
+"  a = mix(a, min(a * 2.2, 1.0), (uMonster > 0.5 && uMonster < 3.5) ? 1.0 : 0.0);\n"
 /* Waking floods the screen white, and light added to white is still
    white - so that one pass writes dark ink over it instead. */
 "  if (uInk > 0.5) { FragColor = vec4(0.04, 0.05, 0.08, a); }\n"

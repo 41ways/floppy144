@@ -1823,72 +1823,6 @@ static void hud_build_wake(const char *a, const char *b)
                         (GLsizeiptr)(g_hud_n * (int)sizeof(Point)), g_hud);
     }
 }
-
-/* Stage by stage, the body you left behind answers.
- *
- * The first voice in the first side passage asks you to move your hand.
- * This is the hand. At the first threshold the little finger goes and that
- * is the whole of it; the thumb does not join until the last one, and by
- * then it is coming up off the sheet. Nobody says anything about it -- it
- * is at the bottom of the screen for three seconds, where your own hand
- * would be, and either you notice or you do not.
- *
- * wake is 0..1 across the four thresholds; t is seconds since the card. */
-static void hud_hand(float wake, float t)
-{
-    /* thumb, then the four, so index 4 is the little finger */
-    static const float FX[5] = { -0.250f, -0.092f,  0.051f,  0.186f,  0.300f };
-    static const float FL[5] = {  0.169f,  0.270f,  0.305f,  0.265f,  0.186f };
-    const float cx = 0.40f, cy = -0.74f;
-    int   fi, k;
-
-    /* The back of a hand, lying over. Everything else on this screen is
-     * made of thousands of points; two hundred read as dust rather than as
-     * a hand, so this is drawn at the density of the lettering beside it. */
-    for (k = 0; k < 900 && g_hud_n < HUD_MAX; k++) {
-        float a = hash1((float)k * 1.71f + 3.0f) * 6.2831853f;
-        float r = (float)sqrt(hash1((float)k * 2.93f + 1.0f)) * 0.173f;
-        g_hud[g_hud_n].x = cx + (float)cos(a) * r * 1.25f;
-        g_hud[g_hud_n].y = cy + (float)sin(a) * r * 0.78f;
-        g_hud[g_hud_n].z = 0.0f;
-        g_hud[g_hud_n].reveal = 0.0f;
-        g_hud[g_hud_n].gain = 0.80f;
-        g_hud_n++;
-    }
-    for (fi = 0; fi < 5; fi++) {
-        /* the little one first; the thumb is last to have anything in it */
-        float own = wake * 5.0f - (float)(4 - fi);
-        float ph, tw, amp;
-        if (own < 0.0f) own = 0.0f;
-        if (own > 1.0f) own = 1.0f;
-        /* involuntary: fast, small, and over before you are sure of it */
-        ph  = t * 8.5f - (float)(4 - fi) * 0.55f;   /* it runs down the hand */
-        tw  = (ph > 0.0f) ? (float)sin(ph) * (float)exp(-ph * 0.50f) : 0.0f;
-        amp = tw * own * 0.135f;
-        for (k = 0; k <= 70 && g_hud_n < HUD_MAX; k++) {
-            float u    = (float)k / 70.0f;
-            float bend = amp * u * u;
-            float bx   = cx + FX[fi] * (1.0f - 0.22f * u) + bend * 0.40f;
-            float by   = cy + 0.07f + u * FL[fi] + bend;
-            int   q;
-            for (q = 0; q < 5 && g_hud_n < HUD_MAX; q++) {
-                float h  = (float)(fi * 173 + k * 7 + q) * 1.37f;
-                float aa = hash1(h) * 6.2831853f;
-                float rr = (float)sqrt(hash1(h + 2.1f)) * 0.030f * (1.0f - 0.35f * u);
-                g_hud[g_hud_n].x = bx + (float)cos(aa) * rr;
-                g_hud[g_hud_n].y = by + (float)sin(aa) * rr;
-                g_hud[g_hud_n].z = 0.0f;
-                g_hud[g_hud_n].reveal = 0.0f;
-                g_hud[g_hud_n].gain = 0.72f + 0.55f * own;
-                g_hud_n++;
-            }
-        }
-    }
-    glBindBuffer(GL_ARRAY_BUFFER, g_hvbo);
-    glBufferSubData(GL_ARRAY_BUFFER, 0,
-                    (GLsizeiptr)(g_hud_n * (int)sizeof(Point)), g_hud);
-}
-
 static void hud_build(const char *left, const char *right, const char *hint)
 {
     char key[96];
@@ -1918,20 +1852,25 @@ static void hud_build(const char *left, const char *right, const char *hint)
 static void water_refresh(float now)
 {
     int i;
-    float cx, cy;
-    tunnel_centre(-GATE_1, &cx, &cy);
     for (i = 0; i < WATER_PTS; i++) {
         float u = hash1((float)i * 1.31f) - 0.5f;
         float v = hash1((float)i * 2.77f + 4.0f);
-        float x = cx + u * 17.0f;
-        float z = -GATE_1 + 3.0f - v * 16.0f;
+        float cx, cy, x, z;
+        z = -GATE_1 + 3.0f - v * 16.0f;
+        /* The floor of the room is cy(z) - 1.05, and cy moves nearly a metre
+         * over three metres of tunnel. Taking one cy for the whole sheet made
+         * a flat plane through a curved floor: near the player it came out at
+         * eye height, edge-on, and invisible. Every point takes the centre at
+         * its own z, so the surface sits in the hole the way the hole is. */
+        tunnel_centre(z, &cx, &cy);
+        x = cx + u * 17.0f;
         float rip = (float)sin(x * 1.7f + now * 1.3f)
                   + (float)sin(z * 2.3f - now * 0.9f);
         g_water[i].x = x;
         g_water[i].y = cy - 1.05f + rip * 0.055f;
         g_water[i].z = z;
         g_water[i].reveal = now - 1000.0f;      /* always lit, via uBase */
-        g_water[i].gain   = 0.35f + 0.30f * hash1((float)i * 5.3f + (float)((int)(now * 2.0f)));
+        g_water[i].gain   = 0.85f + 0.55f * hash1((float)i * 5.3f + (float)((int)(now * 2.0f)));
     }
     glBindBuffer(GL_ARRAY_BUFFER, g_wtvbo);
     glBufferSubData(GL_ARRAY_BUFFER, 0,
@@ -2064,13 +2003,6 @@ void game_init(unsigned seed, float start_depth)
     glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)HUD_MAX * (GLsizeiptr)sizeof(Point),
                  0, GL_DYNAMIC_DRAW);
     setup_attribs(g_hvao, g_hvbo);
-
-    glGenVertexArrays(1, &g_wtvao);
-    glGenBuffers(1, &g_wtvbo);
-    glBindBuffer(GL_ARRAY_BUFFER, g_wtvbo);
-    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)WATER_PTS * (GLsizeiptr)sizeof(Point),
-                 0, GL_DYNAMIC_DRAW);
-    setup_attribs(g_wtvao, g_wtvbo);
 
     glGenVertexArrays(1, &g_wtvao);
     glGenBuffers(1, &g_wtvbo);
@@ -2928,11 +2860,16 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
     }
 
     if (-g_pz > GATE_1 - 30.0f && -g_pz < GATE_1 + 24.0f) {
-        /* the pool, glinting on its own */
+        /* The pool, glinting on its own - and in its own colour. Read in the
+         * distance palette it came back the same amber as the rock around it,
+         * so the one surface in the game you are meant to recognise as water
+         * looked like more floor. Tint 4 is water. */
         glUniform1f(u_persist, 0.0f);
-        glUniform1f(u_base, g_wet ? 0.10f : 0.30f);
+        glUniform1f(u_base, g_wet ? 0.22f : 0.72f);
+        glUniform1f(u_monster, 4.0f);
         glBindVertexArray(g_wtvao);
         glDrawArrays(GL_POINTS, 0, WATER_PTS);
+        glUniform1f(u_monster, 0.0f);
         glUniform1f(u_base, 0.0f);
     }
 
@@ -2975,13 +2912,7 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
         if (st > 4) st = 4;
         sprintf(big, "STAGE %d", st + 1);
         hud_build_wake(big, (g_back > 0.0f) ? "다시 내려간다" : NAME[st]);
-        if (g_gate_t > 0.0f) {
-            /* the card is a still picture; the hand is not, so it has to be
-               rebuilt every frame rather than served from the cache */
-            g_hud_cache[0] = 0;
-            hud_hand((float)st * 0.25f, 2.8f - g_gate_t);
-            g_gate_t -= dt;
-        }
+        if (g_gate_t > 0.0f) g_gate_t -= dt;
     } else {   /* the readout */
         char left[40], right[40];
         const char *hint = (g_note_t > 0.0f) ? g_note
