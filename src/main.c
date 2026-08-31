@@ -578,8 +578,12 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 
         if (shot_path[0] && shot_calm && frame == 1) game_debug_calm();
         if (shot_path[0] && shot_yaw > -1e8f && frame == 3) game_debug_yaw(shot_yaw);
-        if (shot_path[0] && shot_spider >= 0 && frame == 30)
-            game_debug_spider(now, shot_spider);
+        if (shot_path[0] && shot_spider >= 0 && frame == 30) {
+            /* the marched version exists wherever the building does, and
+               that boundary is a depth, not a stage number */
+            if (-game_pz() > 244.0f) game_debug_beast(now, shot_spider);
+            else game_debug_spider(now, shot_spider);
+        }
 
         if (shot_path[0]) {          /* scripted: sound repeatedly, then look */
             /* walk, the way it is played -- unless the point of the run is

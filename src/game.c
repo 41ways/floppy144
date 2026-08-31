@@ -141,7 +141,7 @@ static GLuint g_cave_prog;
 static GLint  c_res, c_cam, c_fwd, c_right, c_up, c_seed, c_wander,
               c_rough, c_time, c_light, c_wet, c_room, c_road, c_white,
               c_pulse, c_hospy, c_blink, c_corrx, c_dooru, c_lampout,
-              c_bra, c_brb;
+              c_monn, c_monp, c_mond, c_bra, c_brb;
 static GLint  u_fade, u_grey;
 static Point *g_mpts;          /* heap: 48 KB of it has no business in the exe */
 
@@ -2109,6 +2109,9 @@ void game_init(unsigned seed, float start_depth)
     c_corrx  = glGetUniformLocation(g_cave_prog, "uCorrX");
     c_dooru  = glGetUniformLocation(g_cave_prog, "uDoor");
     c_lampout= glGetUniformLocation(g_cave_prog, "uLampOut");
+    c_monn   = glGetUniformLocation(g_cave_prog, "uMonN");
+    c_monp   = glGetUniformLocation(g_cave_prog, "uMonP");
+    c_mond   = glGetUniformLocation(g_cave_prog, "uMonD");
     c_bra    = glGetUniformLocation(g_cave_prog, "uBrA");
     c_brb    = glGetUniformLocation(g_cave_prog, "uBrB");
 
@@ -2461,7 +2464,6 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
             glUniform1f(c_blink, g_blink);
             glUniform1f(c_corrx, g_corr_x);
             glUniform1f(c_dooru, g_door_open);
-            glUniform1f(c_lampout, g_lamp_out);
             glUniform3fv(c_bra, 16, bra);
             glUniform3fv(c_brb, 16, brb);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -3032,6 +3034,39 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
             glUniform3fv(c_brb, 16, brb);
             glUniform1f(c_pulse, g_pulse);
             glUniform1f(c_hospy, g_hosp_y);
+            glUniform1f(c_blink, g_blink);
+            glUniform1f(c_corrx, g_corr_x);
+            glUniform1f(c_dooru, g_door_open);
+            glUniform1f(c_lampout, g_lamp_out);
+            glUniform1f(c_lampout, g_lamp_out);
+            {   /* Indoors the things are geometry, not returns: the shader
+                 * marches them alongside the walls so the same lights land
+                 * on them. Six is as many as ever matter at once. */
+                float mp[24], md[24];
+                int mn = 0, mi;
+                if (-g_pz > GATE_2 + 4.0f) {
+                    for (mi = 0; mi < g_mon_count && mn < 6; mi++) {
+                        Monster *mm = &g_mon[mi];
+                        if (!mon_visible(mm)) continue;
+                        mp[mn*4+0] = mm->x;
+                        /* Indoors they walk the floor rather than cling to
+                           rock, and the body rides above it. */
+                        mp[mn*4+1] = hospital_eye_y(mm->z) - 0.66f;
+                        mp[mn*4+2] = mm->z;
+                        mp[mn*4+3] = 1.0f + (float)mm->type;
+                        md[mn*4+0] = mm->dx;
+                        md[mn*4+1] = mm->dy;
+                        md[mn*4+2] = mm->dz;
+                        md[mn*4+3] = mm->stun > 0.0f ? 1.0f : 0.0f;
+                        mn++;
+                    }
+                }
+                glUniform1i(c_monn, mn);
+                if (mn > 0) {
+                    glUniform4fv(c_monp, mn, mp);
+                    glUniform4fv(c_mond, mn, md);
+                }
+            }
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
             glBindVertexArray(g_wvao_full);
             glDrawArrays(GL_TRIANGLES, 0, 3);
@@ -3102,7 +3137,7 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
     glUniform1f(u_fade, 1.0f);
     glUniform1f(u_persist, 0.0f);
     glBindVertexArray(g_mvao);
-    for (i = 0; i < g_mon_count; i++) {
+    for (i = 0; -g_pz < GATE_2 + 4.0f && i < g_mon_count; i++) {
         if (!mon_visible(&g_mon[i])) continue;
         mon_emit_points(&g_mon[i], now);
         /* 1, 2, 3: the shader gives each its own red */
@@ -3346,6 +3381,40 @@ float game_fit(void)         { return cave_sdf(g_px, g_py, g_pz); }
 
 /* Walk the corridor centre line and print the clearance. Guessing where a
  * field closes is how an afternoon goes; measuring it takes a second. */
+/* Put one of them in front of the camera, indoors, so the marched version
+ * can actually be looked at. The cave has game_debug_spider; this is the
+ * same idea for a thing that is geometry rather than returns. */
+void game_debug_beast(float now, int type)
+{
+    Monster *m = &g_mon[0];
+    float f[3], r[3], u[3], nn[3];
+    basis(g_yaw, g_pitch, f, r, u);
+    g_mon_count = 1;
+    {   /* Put it where there is room for it: walk out along the view ray
+         * and take the most open point, or the thing ends up inside a wall
+         * and every capture is a picture of plaster. */
+        float bestd = -1e9f, bt = 4.0f, tt;
+        for (tt = 5.0f; tt <= 9.0f; tt += 0.25f) {
+            float dd = cave_sdf(g_px + f[0]*tt, g_py, g_pz + f[2]*tt);
+            if (dd > bestd) { bestd = dd; bt = tt; }
+        }
+        m->x = g_px + f[0] * bt;
+        m->y = g_py;
+        m->z = g_pz + f[2] * bt;
+    }
+    cave_normal(m->x, m->y, m->z, nn);
+    m->nx = nn[0]; m->ny = nn[1]; m->nz = nn[2];
+    m->seed = 3.1f;
+    mon_make(m, type, 1.0f);
+    m->state  = MON_CHARGING;
+    m->timer  = 60.0f;
+    m->travel = 0.0f;
+    m->stun   = 0.0f;
+    m->dx = -f[0]; m->dy = 0.0f; m->dz = -f[2];
+    m->tx = g_px; m->ty = g_py; m->tz = g_pz;
+    (void)now;
+}
+
 void game_probe(void)
 {
     FILE *f = fopen("probe.txt", "w");
