@@ -307,6 +307,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     HDC    dc;
     HGLRC  rc;
     RECT   rect;
+    DWORD  ex_style;
     LARGE_INTEGER freq, start, prev_t, now_t;
     MSG    msg;
     PIXELFORMATDESCRIPTOR pfd;
@@ -375,11 +376,22 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 
     load_wgl_extensions(inst);
 
+    /* The tool-window style a capture uses has a smaller caption, so the
+     * frame has to be measured with the same extended style the window will
+     * actually have -- otherwise the client area, and every dump taken from
+     * it, comes out a few rows taller than WIN_H. */
+    ex_style = g_headless ? (WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW) : 0;
     rect.left = 0; rect.top = 0; rect.right = WIN_W; rect.bottom = WIN_H;
-    AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
+    AdjustWindowRectEx(&rect, WS_OVERLAPPEDWINDOW, FALSE, ex_style);
 
-    hwnd = CreateWindowExA(0, APP_CLASS, APP_TITLE, WS_OVERLAPPEDWINDOW,
-                           CW_USEDEFAULT, CW_USEDEFAULT,
+    /* A scripted capture is something you run while doing other work, so it
+     * opens off to the side of the desktop and never takes the foreground.
+     * It still needs to be a real, shown window: the GL context draws into
+     * this drawable, and a hidden one comes back black. */
+    hwnd = CreateWindowExA(ex_style,
+                           APP_CLASS, APP_TITLE, WS_OVERLAPPEDWINDOW,
+                           g_headless ? -32000 : CW_USEDEFAULT,
+                           g_headless ? -32000 : CW_USEDEFAULT,
                            rect.right - rect.left, rect.bottom - rect.top,
                            0, 0, inst, 0);
     if (!hwnd) fail("Could not create the game window.");
@@ -428,7 +440,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
                            : (unsigned)(start.QuadPart ^ (start.QuadPart >> 32)),
               start_depth);
 
-    ShowWindow(hwnd, SW_SHOW);
+    ShowWindow(hwnd, g_headless ? SW_SHOWNOACTIVATE : SW_SHOW);
     glViewport(0, 0, g_width, g_height);
 
     QueryPerformanceFrequency(&freq);
