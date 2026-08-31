@@ -38,6 +38,7 @@ static int g_ping     = 0;     /* a click arrived since the last frame */
 static int g_menu     = 0;
 static int g_enter    = 0;
 
+static GLuint g_fbo;
 static int g_headless;    /* -shot: no dialogs, or the script waits forever */
 
 static void fail(const char *msg)
@@ -84,6 +85,10 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         set_capture(hwnd, 0);
         return 0;
     case WM_SIZE:
+        /* A capture draws into a framebuffer of its own at a fixed size, so
+         * whatever the window does -- minimised to nothing, restored, moved
+         * off the screen -- must not change what comes out. */
+        if (g_headless) return 0;
         g_width  = LOWORD(lp);
         g_height = HIWORD(lp);
         if (g_width  < 1) g_width  = 1;
@@ -471,14 +476,44 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
                            : (unsigned)(start.QuadPart ^ (start.QuadPart >> 32)),
               start_depth);
 
+    if (g_headless) {
+        /* Render somewhere that is not the window. Off-screen coordinates do
+         * not keep it off the screen -- the window manager brings it back on
+         * -- and HWND_BOTTOM does not put it under anything, because the
+         * stack that matters is the host's rather than Windows'. So the
+         * capture stops depending on the window being anywhere at all: its
+         * own framebuffer, its own size, and the window can go to the dock. */
+        GLuint col = 0, dep = 0;
+        glGenFramebuffers(1, &g_fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, g_fbo);
+        glGenRenderbuffers(1, &col);
+        glBindRenderbuffer(GL_RENDERBUFFER, col);
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, WIN_W, WIN_H);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                                  GL_RENDERBUFFER, col);
+        glGenRenderbuffers(1, &dep);
+        glBindRenderbuffer(GL_RENDERBUFFER, dep);
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, WIN_W, WIN_H);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                                  GL_RENDERBUFFER, dep);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+            fail("Could not make an off-screen buffer to capture into.");
+        g_width = WIN_W; g_height = WIN_H;
+    }
+
     ShowWindow(hwnd, win_back ? SW_SHOWNOACTIVATE : SW_SHOW);
-    if (win_back)
-        /* Off the side of the desktop is not far enough: a window manager
-         * that keeps it on screen anyway still puts it over whatever the
-         * machine is being used for. Send it to the bottom of the stack as
-         * well, so it sits under every real window instead of on top. */
+    if (win_back) {
+        /* Neither of the polite ways works here. Opening at -32000 does not
+         * keep it off the screen, because the window manager brings it back
+         * on; HWND_BOTTOM does not put it under anything, because the stack
+         * that matters is the host's and not Windows'. The only thing that
+         * actually leaves the screen alone is not being on it: minimise it.
+         * It still has a drawable, so a capture still works, and a demo is
+         * one click in the dock away when it is wanted. */
         SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0,
                      SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        ShowWindow(hwnd, SW_MINIMIZE);
+    }
     glViewport(0, 0, g_width, g_height);
 
     QueryPerformanceFrequency(&freq);
@@ -572,6 +607,13 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
                 game_cave(&cs, &cw, &cr);
                 if (lg) {
                     fprintf(lg, "cave  seed %.3f  wander %.3f  rough %.3f\n", cs, cw, cr);
+                    /* Whether this run is on the user's screen. Saying it is
+                     * not is worth nothing; a minimised window is in the dock
+                     * and cannot be over anything, and this is the only way
+                     * to know that without photographing their desktop. */
+                    fprintf(lg, "window  iconic %d  visible %d  offscreen-fbo %d\n",
+                            IsIconic(hwnd) ? 1 : 0, IsWindowVisible(hwnd) ? 1 : 0,
+                            g_fbo ? 1 : 0);
                     fclose(lg);
                 }
             }

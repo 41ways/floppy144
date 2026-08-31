@@ -28,6 +28,15 @@ typedef ptrdiff_t GLintptr;
 #define GL_TEXTURE0          0x84C0
 #define GL_CLAMP_TO_EDGE     0x812F
 #define GL_MULTISAMPLE       0x809D
+/* A capture renders into one of these instead of into the window, so the
+   window never has to be on screen -- or even restored -- at all. */
+#define GL_FRAMEBUFFER       0x8D40
+#define GL_RENDERBUFFER      0x8D41
+#define GL_COLOR_ATTACHMENT0 0x8CE0
+#define GL_DEPTH_ATTACHMENT  0x8D00
+#define GL_DEPTH_COMPONENT24 0x81A6
+#define GL_RGBA8             0x8058
+#define GL_FRAMEBUFFER_COMPLETE 0x8CD5
 
 /* --- WGL extension enums --- */
 #define WGL_CONTEXT_MAJOR_VERSION_ARB 0x2091
@@ -77,7 +86,14 @@ typedef ptrdiff_t GLintptr;
   X(PFNGLUNIFORM3F,         void,    glUniform3f,         (GLint, GLfloat, GLfloat, GLfloat)) \
   X(PFNGLUNIFORM3FV,        void,    glUniform3fv,        (GLint, GLsizei, const GLfloat*)) \
   X(PFNGLUNIFORM4F,         void,    glUniform4f,         (GLint, GLfloat, GLfloat, GLfloat, GLfloat)) \
-  X(PFNGLUNIFORMMATRIX4FV,  void,    glUniformMatrix4fv,  (GLint, GLsizei, GLboolean, const GLfloat*))
+  X(PFNGLUNIFORMMATRIX4FV,  void,    glUniformMatrix4fv,  (GLint, GLsizei, GLboolean, const GLfloat*)) \
+  X(PFNGLGENFRAMEBUFFERS,   void,    glGenFramebuffers,   (GLsizei, GLuint*)) \
+  X(PFNGLBINDFRAMEBUFFER,   void,    glBindFramebuffer,   (GLenum, GLuint)) \
+  X(PFNGLGENRENDERBUFFERS,  void,    glGenRenderbuffers,  (GLsizei, GLuint*)) \
+  X(PFNGLBINDRENDERBUFFER,  void,    glBindRenderbuffer,  (GLenum, GLuint)) \
+  X(PFNGLRENDERBUFFERSTORAGE,     void,   glRenderbufferStorage,     (GLenum, GLenum, GLsizei, GLsizei)) \
+  X(PFNGLFRAMEBUFFERRENDERBUFFER, void,   glFramebufferRenderbuffer, (GLenum, GLenum, GLenum, GLuint)) \
+  X(PFNGLCHECKFRAMEBUFFERSTATUS,  GLenum, glCheckFramebufferStatus,  (GLenum))
 
 /* typedef + extern pointer for each */
 #define GL33_DECL(TYPE, RET, NAME, ARGS) \
