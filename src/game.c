@@ -95,7 +95,8 @@
 typedef struct { float x, y, z, reveal, gain; } Point;   /* 20 bytes */
 
 static Point *g_pts;
-static int    g_count;
+static int    g_count;   /* how many of the ring are worth drawing */
+static int    g_head;    /* where the next mark goes */
 static Point *g_wpts;          /* the wave in flight, a ring that nobody reads back */
 static int    g_wcount;
 static GLuint g_vao, g_vbo, g_wvao, g_wvbo, g_mvao, g_mvbo, g_hvao, g_hvbo,
@@ -1154,12 +1155,56 @@ static void ping_begin(float now, const float *f, const float *r, const float *u
     voice_lit_by(f, ping_reach());
 }
 
+/* The map is a ring, and it has to be.
+ *
+ * It used to be a bucket: every append was guarded by g_count < MAX_POINTS and
+ * simply stopped when it got there. A sounding costs about seven thousand
+ * marks, so a player clicking once a second filled 1.2 M in a little under
+ * three minutes -- a third of the way through an eight-minute game -- and from
+ * then on the only verb they had did nothing at all. No message, no fade, the
+ * click just stopped answering. An autopilot run reached the ceiling at 67 m.
+ *
+ * Overwriting the oldest is also the better rule on its own terms. What goes
+ * is the far end of where you have already been, which you are walking away
+ * from; the cave closes up behind you instead of staying lit for ever. */
+static void pt_put(float x, float y, float z, float reveal, float gain)
+{
+    g_pts[g_head].x = x;
+    g_pts[g_head].y = y;
+    g_pts[g_head].z = z;
+    g_pts[g_head].reveal = reveal;
+    g_pts[g_head].gain   = gain;
+    if (++g_head >= MAX_POINTS) g_head = 0;
+    if (g_count < MAX_POINTS) g_count++;
+}
+
+/* Push [from, g_head) to the card -- in two goes if it wrapped round the end.
+ * from == g_head means nothing was added: a single emitter never lays down a
+ * whole ring's worth, so it cannot mean a full lap. */
+static void pt_upload(int from)
+{
+    if (from == g_head) return;
+    glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
+    if (g_head > from) {
+        glBufferSubData(GL_ARRAY_BUFFER, (GLintptr)(from * (int)sizeof(Point)),
+                        (GLsizeiptr)((g_head - from) * (int)sizeof(Point)),
+                        g_pts + from);
+        return;
+    }
+    glBufferSubData(GL_ARRAY_BUFFER, (GLintptr)(from * (int)sizeof(Point)),
+                    (GLsizeiptr)((MAX_POINTS - from) * (int)sizeof(Point)),
+                    g_pts + from);
+    if (g_head > 0)
+        glBufferSubData(GL_ARRAY_BUFFER, 0,
+                        (GLsizeiptr)(g_head * (int)sizeof(Point)), g_pts);
+}
+
 static void ping_work(void)
 {
     int b;
     int budget = PING_CHUNK;
-    int wall_start = g_count, air_start = g_wcount;
-    int added, air_added;
+    int wall_start = g_head, air_start = g_wcount;
+    int air_added;
     float cosmax = (float)cos(CONE_HALF_ANGLE);
 
     if (!g_ping_busy) return;
@@ -1200,7 +1245,6 @@ static void ping_work(void)
         for (b = 0; b < PING_BOUNCES; b++) {
             float t, n[3], dot;
 
-            if (g_count >= MAX_POINTS) break;
             if (!cave_ray(ox, oy, oz, dx, dy, dz, MAX_TRAVEL - travelled, &t)) break;
 
             /* Trace the segment it just crossed.
@@ -1252,21 +1296,18 @@ static void ping_work(void)
                  * instead of a scatter. */
                 int   nmark = MARK_SPLASH + (int)(g_ping_room * 11.0f);
                 float srad  = SPLASH_R * (1.0f + g_ping_room * 1.7f);
-                for (m = 0; m < nmark && g_count < MAX_POINTS; m++) {
+                for (m = 0; m < nmark; m++) {
                     float a = (hash1((float)i * 3.7f + (float)b * 11.0f + (float)m * 2.3f) - 0.5f) * 2.0f * srad;
                     float c = (hash1((float)i * 5.1f + (float)b * 7.0f  + (float)m * 3.9f) - 0.5f) * 2.0f * srad;
                     if (m == 0) { a = 0.0f; c = 0.0f; }      /* one dead on the hit */
-                    g_pts[g_count].x = ox + t1[0]*a + t2[0]*c;
-                    g_pts[g_count].y = oy + t1[1]*a + t2[1]*c;
-                    g_pts[g_count].z = oz + t1[2]*a + t2[2]*c;
-                    g_pts[g_count].reveal = g_ping_t0 + travelled / wave_speed();
                     /* The mark keeps more of itself than the bullet does: a
                      * tired ricochet still proves a wall is there, and the
                      * cave only takes shape if late hits stay readable. */
-                    g_pts[g_count].gain = (0.42f + 0.58f * gain)
-                                        * (1.0f + 0.35f * g_ping_room);
-                    g_count++;
-                    added++;
+                    pt_put(ox + t1[0]*a + t2[0]*c,
+                           oy + t1[1]*a + t2[1]*c,
+                           oz + t1[2]*a + t2[2]*c,
+                           g_ping_t0 + travelled / wave_speed(),
+                           (0.42f + 0.58f * gain) * (1.0f + 0.35f * g_ping_room));
                 }
             }
 
@@ -1304,16 +1345,9 @@ static void ping_work(void)
     }
 
 
-    added     = g_count  - wall_start;
     air_added = g_wcount - air_start;
 
-    if (added > 0) {
-        glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
-        glBufferSubData(GL_ARRAY_BUFFER,
-                        (GLintptr)(wall_start * (int)sizeof(Point)),
-                        (GLsizeiptr)(added * (int)sizeof(Point)),
-                        g_pts + wall_start);
-    }
+    pt_upload(wall_start);
     if (air_added > 0) {
         glBindBuffer(GL_ARRAY_BUFFER, g_wvbo);
         glBufferSubData(GL_ARRAY_BUFFER,
@@ -1331,8 +1365,7 @@ static void ping_work(void)
 static void emit_defib(float now)
 {
     int i, b;
-    int start = g_count;
-    int added = 0;
+    int start = g_head;
 
     for (i = 0; i < 1400; i++) {
         float k  = ((float)i + 0.5f) / 1400.0f;
@@ -1345,19 +1378,16 @@ static void emit_defib(float now)
 
         for (b = 0; b < 3; b++) {
             float t, n2[3], dot2;
-            if (g_count >= MAX_POINTS) break;
             if (!cave_ray(ox, oy, oz, dx, dy, dz, 46.0f - travelled, &t)) break;
             ox += dx * t; oy += dy * t; oz += dz * t; travelled += t;
             cave_normal(ox, oy, oz, n2);
             {   int m2;
-                for (m2 = 0; m2 < 3 && g_count < MAX_POINTS; m2++) {
+                for (m2 = 0; m2 < 3; m2++) {
                     float h = (float)(i * 31 + b * 7 + m2) * 1.7f;
-                    g_pts[g_count].x = ox + (hash1(h) - 0.5f) * 0.3f;
-                    g_pts[g_count].y = oy + (hash1(h + 2.0f) - 0.5f) * 0.3f;
-                    g_pts[g_count].z = oz + (hash1(h + 5.0f) - 0.5f) * 0.3f;
-                    g_pts[g_count].reveal = now + travelled / 34.0f;
-                    g_pts[g_count].gain = gain;
-                    g_count++; added++;
+                    pt_put(ox + (hash1(h) - 0.5f) * 0.3f,
+                           oy + (hash1(h + 2.0f) - 0.5f) * 0.3f,
+                           oz + (hash1(h + 5.0f) - 0.5f) * 0.3f,
+                           now + travelled / 34.0f, gain);
                 }
             }
             if (travelled > 44.0f) break;
@@ -1369,13 +1399,7 @@ static void emit_defib(float now)
             gain *= 0.85f;
         }
     }
-    if (added > 0) {
-        glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
-        glBufferSubData(GL_ARRAY_BUFFER,
-                        (GLintptr)(start * (int)sizeof(Point)),
-                        (GLsizeiptr)(added * (int)sizeof(Point)),
-                        g_pts + start);
-    }
+    pt_upload(start);
 }
 
 /* A quieter cousin: every few seconds after the first shock, a cone of the
@@ -1385,7 +1409,7 @@ static void emit_defib(float now)
 static void emit_guide(float now)
 {
     int i;
-    int start = g_count, added = 0;
+    int start = g_head;
     float dxx, dyy, dzz, dl;
     float doorx, doory;
     tunnel_centre(-WAKE_Z + 4.0f, &doorx, &doory);
@@ -1394,27 +1418,17 @@ static void emit_guide(float now)
     if (dl < 1.0f) return;
     dxx /= dl; dyy /= dl; dzz /= dl;
 
-    for (i = 0; i < 240 && g_count < MAX_POINTS; i++) {
+    for (i = 0; i < 240; i++) {
         float j1 = (hash1((float)i * 1.91f + now) - 0.5f) * 0.55f;
         float j2 = (hash1((float)i * 3.37f + now * 2.0f) - 0.5f) * 0.55f;
         float rx = dxx + j1 * (dzz + 0.3f), ry = dyy + j2, rz = dzz - j1 * (dxx + 0.3f);
         float rl = (float)sqrt(rx * rx + ry * ry + rz * rz), t;
         rx /= rl; ry /= rl; rz /= rl;
         if (!cave_ray(g_px, g_py, g_pz, rx, ry, rz, 26.0f, &t)) continue;
-        g_pts[g_count].x = g_px + rx * t;
-        g_pts[g_count].y = g_py + ry * t;
-        g_pts[g_count].z = g_pz + rz * t;
-        g_pts[g_count].reveal = now + t / 30.0f;
-        g_pts[g_count].gain = 2.0f;
-        g_count++; added++;
+        pt_put(g_px + rx * t, g_py + ry * t, g_pz + rz * t,
+               now + t / 30.0f, 2.0f);
     }
-    if (added > 0) {
-        glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
-        glBufferSubData(GL_ARRAY_BUFFER,
-                        (GLintptr)(start * (int)sizeof(Point)),
-                        (GLsizeiptr)(added * (int)sizeof(Point)),
-                        g_pts + start);
-    }
+    pt_upload(start);
     audio_beep();
 }
 
@@ -1559,7 +1573,7 @@ static void title_line(const char *str, int px, float scale, float yoff,
      * low truncated it mid-glyph, and because the cut landed differently each
      * time the title was rebuilt it read as the game restarting. */
     n = plat_text_points(str, px, g_text_xy, TEXT_MAX_PTS);
-    for (i = 0; i < n && g_count < MAX_POINTS; i++) {
+    for (i = 0; i < n && g_head < MAX_POINTS; i++) {
         float x = g_px + g_text_xy[i * 2 + 0] * scale;
         float y = g_py - g_text_xy[i * 2 + 1] * scale + yoff;   /* bitmaps run down */
         float z = g_pz - 5.0f;
@@ -1568,12 +1582,7 @@ static void title_line(const char *str, int px, float scale, float yoff,
          * title is the mechanic: a sounding sweeps left to right and the
          * letters brighten as it reaches them. delay staggers the lines so
          * the sweep arrives at each in turn. */
-        g_pts[g_count].x = x;
-        g_pts[g_count].y = y;
-        g_pts[g_count].z = z;
-        g_pts[g_count].reveal = now + delay;
-        g_pts[g_count].gain   = 1.0f;
-        g_count++;
+        pt_put(x, y, z, now + delay, 1.0f);
     }
 }
 
@@ -1597,7 +1606,10 @@ static void enter_title(float now)
      * The title looks straight down -z, always. */
     g_yaw = 0.0f; g_pitch = 0.0f;
     g_state = ST_TITLE;
+    /* the title is the one thing that starts the ring over: nothing sounded
+     * in a previous run should still be standing behind the word */
     g_count = 0;
+    g_head  = 0;
     title_line("SOUNDING",             150, 2.05f,  0.55f, 0.30f, now);
     title_line("EVERY CLICK IS A SOUNDING", 30, 2.05f, -0.64f, 0.95f, now);
     title_line("CLICK TO START",        40, 2.05f, -1.35f, 1.35f, now);
@@ -2811,7 +2823,8 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
                                        "백룸", "리미널 홀" };
         char big[24];
         int  st = (g_back > 0.0f) ? g_stage : g_gate_n;
-        if (st < 0) st = 0; if (st > 4) st = 4;
+        if (st < 0) st = 0;
+        if (st > 4) st = 4;
         sprintf(big, "STAGE %d", st + 1);
         hud_build_wake(big, (g_back > 0.0f) ? "다시 내려간다" : NAME[st]);
         if (g_gate_t > 0.0f) {
