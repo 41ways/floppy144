@@ -33,6 +33,7 @@ typedef struct {
     int   kind;
     float t;        /* seconds since the voice started */
     float dur;
+    float p;        /* one number the voice reads: a footfall's wetness */
 } Voice;
 
 static HWAVEOUT g_wo;
@@ -56,7 +57,7 @@ static float frand(void)
     return (float)((g_rng >> 9) & 0x7FFF) / 16383.5f - 1.0f;
 }
 
-static void voice_start(int kind, float dur)
+static void voice_startp(int kind, float dur, float p)
 {
     int i;
     for (i = 0; i < MAX_VOICES; i++) {
@@ -65,10 +66,13 @@ static void voice_start(int kind, float dur)
             g_voices[i].kind   = kind;
             g_voices[i].t      = 0.0f;
             g_voices[i].dur    = dur;
+            g_voices[i].p      = p;
             return;
         }
     }
 }
+
+static void voice_start(int kind, float dur) { voice_startp(kind, dur, 0.0f); }
 
 /* A struck bowl rather than a drop in water. Partials sit at non-integer
  * ratios, which is what separates a bell from a note and reads as somewhere
@@ -103,10 +107,20 @@ static float voice_sample(Voice *v)
         float res = (float)sin(6.2831853 * (150.0 + 90.0 * sw) * v->t);
         s = (frand() * 0.7f + res * 0.3f) * sw * sw * 0.34f;
     } else if (v->kind == V_STEP) {
-        /* a shoe on vinyl: a soft knock and the tiniest squeak of it */
-        s = (frand() * (float)exp(-x * 26.0)
+        /* A shoe on vinyl: a soft knock and the tiniest squeak of it.
+         * Wet, it also has to let go of the floor -- the knock is duller,
+         * there is a scatter of water in it, and the tail is longer and
+         * dirtier. Coming out of the flooded stretch every step carries a
+         * little less of that until, about a dozen paces later, it is a
+         * dry shoe again and you have stopped noticing. */
+        float w   = v->p;
+        float dry = (frand() * (float)exp(-x * 26.0)
            + (float)sin(6.2831853 * 95.0 * v->t) * (float)exp(-x * 18.0) * 0.5f
            + (float)sin(6.2831853 * 1450.0 * v->t) * (float)exp(-x * 40.0) * 0.06f) * 0.30f;
+        float wet = (frand() * (float)exp(-x * 6.5)
+           + (float)sin(6.2831853 * 2400.0 * v->t) * (float)exp(-x * 13.0) * 0.22f
+           + (float)sin(6.2831853 * 62.0 * v->t) * (float)exp(-x * 9.0) * 0.35f) * 0.30f;
+        s = dry * (1.0f - 0.35f * w) + wet * w;
     } else if (v->kind == V_DEFIB) {
         /* the whine of the charge, the thump of it landing, and two beats of
          * a heart deciding to continue */
@@ -285,7 +299,9 @@ void audio_roar(int type)
 void audio_hum(void)  { voice_start(V_HUM, 24.0f); }
 void audio_stroke(void) { voice_start(V_STROKE, 0.62f); }
 void audio_defib(void)  { voice_start(V_DEFIB, 2.60f); }
-void audio_step(void)   { voice_start(V_STEP, 0.16f); }
+/* wet is 0 for a dry shoe and 1 straight out of the water */
+void audio_step(float wet)
+{ voice_startp(V_STEP, 0.16f + 0.26f * wet, wet); }
 void audio_set_volume(float v) { g_vol = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); }
 float audio_get_volume(void)   { return g_vol; }
 void audio_hit(void)  { voice_start(V_HIT,  0.55f); }

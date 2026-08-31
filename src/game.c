@@ -141,7 +141,12 @@ static int   g_menu_sel, g_menu_mode;
 static int   g_menu_prev;         /* the state the menu will hand back */
 static const char *g_note;        /* one line, from the other side */
 static float g_note_t;
+static float g_check;             /* the depth a death puts you back at */
+static float g_gate_t;            /* the stage card, counting down */
+static int   g_gate_n;            /* and which stage it is announcing */
+static float g_back;              /* the trip back to the checkpoint */
 static float g_step_acc;          /* metres since the last footfall */
+static float g_wetfeet;           /* 1 straight out of the water, drying */
 static int   g_steps;             /* footfalls so far - read by -shot only */
 static float g_pulse;             /* the beat you feel as the door nears */
 static float g_dive;              /* the plunge at gate one */
@@ -1355,13 +1360,16 @@ static void respawn(float now)
      * it. Spawning at 0,0,0 therefore buried the player inside rock, where
      * every ping ray hit a wall 6 cm away and the screen filled with a ball
      * of yellow returns. Start on the axis instead. */
-    tunnel_centre(-g_start_depth, &cx, &cy);
-    g_px = cx; g_py = cy; g_pz = -g_start_depth;
+    /* Not the entrance. Walking the first two hundred metres again for the
+     * third time is not a second chance, it is a punishment for having had
+     * one -- so a death puts you back at the last threshold you crossed. */
+    tunnel_centre(-g_check, &cx, &cy);
+    g_px = cx; g_py = cy; g_pz = -g_check;
     {   /* The tunnel bends, so a fixed heading points into the wall as often
          * as not - and in the dark that is indistinguishable from the game
          * being broken. Face the way the passage actually runs. */
         float ax, ay, fx, fz;
-        tunnel_centre(-g_start_depth - 3.0f, &ax, &ay);
+        tunnel_centre(-g_check - 3.0f, &ax, &ay);
         fx = ax - cx;
         fz = -3.0f;
         g_yaw = (float)atan2(fx, -fz);
@@ -1386,6 +1394,9 @@ static void new_attempt(unsigned seed, float now)
     g_pings  = 0;
     g_heard  = 0;
     g_heard_n = 0;
+    g_check  = g_start_depth;
+    g_gate_t = 0.0f; g_back = 0.0f;
+    g_wetfeet = 0.0f; g_step_acc = 0.0f;
     g_lives  = START_LIVES;
     g_best_depth = 0.0f;
     g_has_moved = 0;
@@ -2176,11 +2187,13 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
 
     basis(g_yaw, g_pitch, f, r, u);
 
-    /* move */
-    if (in->fwd)   { mx += f[0]; my += f[1]; mz += f[2]; }
-    if (in->back)  { mx -= f[0]; my -= f[1]; mz -= f[2]; }
-    if (in->right) { mx += r[0]; my += r[1]; mz += r[2]; }
-    if (in->left)  { mx -= r[0]; my -= r[1]; mz -= r[2]; }
+    /* move -- except while the shock is carrying you back up the tunnel */
+    if (g_back <= 0.0f) {
+        if (in->fwd)   { mx += f[0]; my += f[1]; mz += f[2]; }
+        if (in->back)  { mx -= f[0]; my -= f[1]; mz -= f[2]; }
+        if (in->right) { mx += r[0]; my += r[1]; mz += r[2]; }
+        if (in->left)  { mx -= r[0]; my -= r[1]; mz -= r[2]; }
+    }
 
     len = (float)sqrt(mx * mx + my * my + mz * mz);
 
@@ -2212,10 +2225,17 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
             moved = (float)sqrt((g_px-ox)*(g_px-ox) + (g_py-oy)*(g_py-oy)
                               + (g_pz-oz)*(g_pz-oz));
             g_travelled += moved;
-            /* in the hall your feet make the sound hospital floors make */
-            if (g_shockf > 0.3f) {
-                g_step_acc += moved;
-                if (g_step_acc > 1.05f) { g_step_acc = 0.0f; audio_step(); g_steps++; }
+            /* Your feet, everywhere you are still walking on something.
+             * They dry out over about a dozen paces after the water. */
+            if (g_wetfeet > 0.0f) {
+                g_wetfeet -= moved / 14.0f;
+                if (g_wetfeet < 0.0f) g_wetfeet = 0.0f;
+            }
+            g_step_acc += moved;
+            if (g_step_acc > 1.05f) {
+                g_step_acc = 0.0f;
+                audio_step(g_wetfeet);
+                g_steps++;
             }
         }
         g_has_moved = 1;
@@ -2238,7 +2258,9 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
         if (wet != g_wet) {
             g_wet = wet;
             audio_submerged(wet);
-            audio_splash();
+            audio_splash();               /* going under, and coming back out */
+            /* and you climb out of it soaked */
+            if (!wet) { g_wetfeet = 1.0f; g_step_acc = 0.9f; }
             g_vx = g_vy = g_vz = 0.0f;
         }
     }
@@ -2252,6 +2274,10 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
         while (g_stage < 4 && -g_pz >= GATES[g_stage]) {
             g_stage++;
             g_stage_flash = 1.0f;
+            /* three metres past it, so arriving does not re-cross it */
+            g_check  = GATES[g_stage - 1] + 3.0f;
+            g_gate_t = 2.8f;
+            g_gate_n = g_stage;
             if (g_stage >= 4) {
                 audio_hum();                   /* the exit is somewhere in this */
             } else if (g_stage == 1) {
@@ -2300,7 +2326,7 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
             }
         }
     }
-    if (g_stage_flash > 0.0f) g_stage_flash -= dt * 0.55f;
+    if (g_stage_flash > 0.0f) g_stage_flash -= dt * 0.34f;   /* the card's length */
     g_stagef += ((float)g_stage - g_stagef) * (1.0f - (float)exp(-dt * 1.6f));
     if (g_dive > 0.0f) g_dive -= dt * 0.8f;
     if (g_note_t > 0.0f) g_note_t -= dt;
@@ -2364,18 +2390,25 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
         g_mon_count = want;
     }
 
-    for (i = 0; i < g_mon_count; i++) {
+    if (g_back > 0.0f) {
+        /* Two seconds of being somewhere else. The team downstairs has you
+         * and the room is white for a moment, and then you are back at the
+         * last threshold you got past -- which is the only reason the map
+         * you built is worth anything. */
+        g_back -= dt;
+        if (g_back <= 0.0f) { g_back = 0.0f; respawn(now); }
+    } else for (i = 0; i < g_mon_count; i++) {
         if (mon_step(&g_mon[i], dt, now)) {
             g_lives--;
-            g_flash = 1.0f;
             audio_hit();
             if (g_lives <= 0) {
                 g_state = ST_FLATLINE;
                 g_flat  = 0.0f;
                 audio_flatline();
             } else {
-                /* you keep the map - walking back down is the reward for it */
-                respawn(now);
+                g_back  = 1.9f;
+                g_flash = 1.7f;
+                audio_defib();          /* what actually pulls you back */
             }
             break;
         }
@@ -2385,10 +2418,16 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
     if (g_flash < 0.0f) g_flash = 0.0f;
 
     /* draw */
-    glClearColor(0.008f + g_flash * 0.30f + g_stage_flash * 0.05f
-                        + (g_dive > 0.0f ? g_dive * 0.10f : 0.0f),
-                 0.012f + g_stage_flash * 0.07f,
-                 0.020f + g_stage_flash * 0.09f, 1.0f);
+    {   /* A threshold is a change of place, so the place changes: the dark
+         * the whole game is built on blanches to a cold ward white and comes
+         * back over about three seconds, under the card. Small enough at the
+         * old 0.05 that you could cross a gate and not know you had. */
+        float gf = g_stage_flash * g_stage_flash;   /* holds, then lets go */
+        glClearColor(0.008f + g_flash * 0.30f + gf * 0.34f
+                            + (g_dive > 0.0f ? g_dive * 0.10f : 0.0f),
+                     0.012f + gf * 0.38f,
+                     0.020f + gf * 0.42f, 1.0f);
+    }
     glClear(GL_COLOR_BUFFER_BIT);
 
     mat4_persp(proj, 1.30f,
@@ -2502,7 +2541,19 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
     }
     glUniform1f(u_monster, 0.0f);
 
-    {   /* the readout */
+    if (g_gate_t > 0.0f || g_back > 0.0f) {
+        /* A threshold has to land as an event, not as a digit changing in
+         * the corner. The readout gets out of the way and the screen says
+         * where you are, in the same lettering the monitor uses. */
+        static const char *NAME[5] = { "", "수몰 구간", "병원이 되기 시작한다",
+                                       "백룸", "리미널 홀" };
+        char big[24];
+        int  st = (g_back > 0.0f) ? g_stage : g_gate_n;
+        if (st < 0) st = 0; if (st > 4) st = 4;
+        sprintf(big, "STAGE %d", st + 1);
+        hud_build_wake(big, (g_back > 0.0f) ? "다시 내려간다" : NAME[st]);
+        if (g_gate_t > 0.0f) g_gate_t -= dt;
+    } else {   /* the readout */
         char left[40], right[40];
         const char *hint = (g_note_t > 0.0f) ? g_note
                          : (g_ev == 2)
@@ -2531,16 +2582,19 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
         sprintf(right, "LIFE %s", g_lives >= 3 ? "* * *"
                                 : (g_lives == 2 ? "* *" : (g_lives == 1 ? "*" : "-")));
         hud_build(left, right, hint);
+    }
 
-        if (g_hud_n > 0) {
-            glUniform1f(u_monster, 0.0f);
-            glUniform1f(u_persist, 1.0f);
-            glUniform1f(u_fade, 1.0f);
-            glUniform1f(u_flat, 1.0f);
-            glBindVertexArray(g_hvao);
-            glDrawArrays(GL_POINTS, 0, g_hud_n);
-            glUniform1f(u_flat, 0.0f);
-        }
+    if (g_hud_n > 0) {          /* readout or card, whichever was just built */
+        glUniform1f(u_monster, 0.0f);
+        glUniform1f(u_persist, 1.0f);
+        glUniform1f(u_fade, 1.0f);
+        /* the card arrives lit rather than waiting to be sounded */
+        glUniform1f(u_base, (g_gate_t > 0.0f || g_back > 0.0f) ? 0.95f : 0.0f);
+        glUniform1f(u_flat, 1.0f);
+        glBindVertexArray(g_hvao);
+        glDrawArrays(GL_POINTS, 0, g_hud_n);
+        glUniform1f(u_flat, 0.0f);
+        glUniform1f(u_base, 0.0f);
     }
 }
 
