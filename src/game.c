@@ -147,6 +147,8 @@ static int   g_gate_n;            /* and which stage it is announcing */
 static float g_back;              /* the trip back to the checkpoint */
 static float g_step_acc;          /* metres since the last footfall */
 static float g_wetfeet;           /* 1 straight out of the water, drying */
+static int   g_maul_i = -1;       /* the one that has you, while it has you */
+static float g_maul_x, g_maul_y, g_maul_z, g_maul_sc;
 static int   g_steps;             /* footfalls so far - read by -shot only */
 static float g_pulse;             /* the beat you feel as the door nears */
 static float g_dive;              /* the plunge at gate one */
@@ -342,7 +344,7 @@ static float gate_bulge(float z)
     {
         /* the first chamber is a hall with a pool in it, so it opens wider
          * and longer than the others */
-        static const float R[4] = { 15.0f, GATE_R, GATE_R, 11.0f };
+        static const float R[4] = {  4.0f, GATE_R, GATE_R, 11.0f };   /* GATE_1 is a room now */
         static const float W[4] = {  8.0f, GATE_W, GATE_W, GATE_W };
         if (best > W[k] * 4.0f) return 0.0f;
         dz = d - GATES[k];
@@ -372,6 +374,38 @@ static float cave_sdf(float x, float y, float z)
         + gate_bulge(z);
     {   /* whichever is more open here, the main passage or a branch */
         float main_air = rad - r;
+        {   /* The first threshold is not a wider bit of cave. It is a room:
+             * a flat floor, flat walls, a flat ceiling, and nothing in it
+             * except a rectangular pool cut into the middle of the floor.
+             * Walking forward used to put you in water without your ever
+             * having been anywhere -- you have to arrive somewhere first,
+             * and see what you are about to go into. */
+            float dep = -z;
+            float rd  = (float)fabs(dep - (GATE_1 + 5.0f));
+            if (rd < 21.0f) {
+                float fl   = cy - 1.05f;             /* the water is flush with it */
+                float wall = 12.0f - (float)fabs(dx);
+                float ceil = (cy + 3.2f) - y;
+                float ends = 17.0f - rd;
+                float flor = y - fl;
+                /* the pool, exactly where the surface is drawn */
+                float p1 = 8.5f - (float)fabs(dx);
+                float p2 = 8.0f - (float)fabs(dep - 125.0f);
+                float p3 = y - (fl - 7.0f);
+                float pool = p1 < p2 ? p1 : p2;
+                if (p3 < pool) pool = p3;
+                if (pool > flor) flor = pool;        /* the hole in the floor */
+                {   float room = wall;
+                    if (ceil < room) room = ceil;
+                    if (ends < room) room = ends;
+                    if (flor < room) room = flor;
+                    /* soft at the doorways so the corridor runs into it */
+                    {   float kk = 1.0f - smoothstep01(13.0f, 20.0f, rd);
+                        main_air = main_air * (1.0f - kk) + room * kk;
+                    }
+                }
+            }
+        }
         if (-z > GATE_2 + 4.0f) {
             /* The hall would not be the hall if you could walk it straight.
              * Every seven metres a wall crosses it with one doorway in it,
@@ -915,7 +949,7 @@ static void mon_emit_points(const Monster *m, float now)
 static int depth_is_wet(float z)
 {
     float d = -z;
-    return (d >= GATE_1 - 1.0f && d < GATE_2 - 1.0f);
+    return (d >= GATE_1 - 3.0f && d < GATE_2 - 1.0f);   /* the pool's near rim */
 }
 
 static float wave_speed(void)
@@ -2391,12 +2425,43 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
     }
 
     if (g_back > 0.0f) {
-        /* Two seconds of being somewhere else. The team downstairs has you
-         * and the room is white for a moment, and then you are back at the
-         * last threshold you got past -- which is the only reason the map
-         * you built is worth anything. */
+        /* Two seconds of being somewhere else. First it is on you: whatever
+         * reached you comes the rest of the way in and takes the screen,
+         * because a life leaving as a number in the corner is not a thing
+         * that happened to anybody. Then the team downstairs has you, the
+         * room goes white, and you are back at the last threshold you got
+         * past -- which is the only reason the map you built is worth
+         * anything. */
         g_back -= dt;
-        if (g_back <= 0.0f) { g_back = 0.0f; respawn(now); }
+        if (g_maul_i >= 0) {
+            Monster *m = &g_mon[g_maul_i];
+            float e = 1.0f - g_back / 1.9f;
+            if (e > 1.0f) e = 1.0f;
+            e = smoothstep01(0.0f, 0.34f, e);       /* in fast, then it stays */
+            /* It reaches you at about a metre, which is already close, so
+             * the last of it has to be big rather than far: it comes to
+             * arm's length and opens. The feet stay where they were standing
+             * and the legs stretch back off the edges of the screen, which
+             * is the part that reads as being held. */
+            {   /* The head sits a quarter of a body ahead of the origin, so
+                 * aiming the origin at your face buries the head behind it.
+                 * Aim the head instead: it ends up where your eye is, and
+                 * the rest of it closes over from there. */
+                float sc  = g_maul_sc * (1.0f + 3.2f * e);
+                float tgt = 0.16f + 0.26f * sc;
+                m->scale = sc;
+                m->x = g_maul_x + (g_px + f[0] * tgt - g_maul_x) * e;
+                m->y = g_maul_y + (g_py + f[1] * tgt - g_maul_y) * e;
+                m->z = g_maul_z + (g_pz + f[2] * tgt - g_maul_z) * e;
+            }
+            /* facing you, so what fills the screen is the front of it */
+            m->dx = -f[0]; m->dy = -f[1]; m->dz = -f[2];
+        }
+        if (g_back <= 0.0f) {
+            g_back = 0.0f;
+            g_maul_i = -1;
+            respawn(now);
+        }
     } else for (i = 0; i < g_mon_count; i++) {
         if (mon_step(&g_mon[i], dt, now)) {
             g_lives--;
@@ -2408,6 +2473,13 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
             } else {
                 g_back  = 1.9f;
                 g_flash = 1.7f;
+                g_maul_i  = i;
+                g_maul_x  = g_mon[i].x;
+                g_maul_y  = g_mon[i].y;
+                g_maul_z  = g_mon[i].z;
+                g_maul_sc = g_mon[i].scale;
+                g_gate_t  = 0.0f;   /* a threshold card would be talking over it */
+                audio_roar(g_mon[i].type);
                 audio_defib();          /* what actually pulls you back */
             }
             break;
@@ -2541,7 +2613,11 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
     }
     glUniform1f(u_monster, 0.0f);
 
-    if (g_gate_t > 0.0f || g_back > 0.0f) {
+    if (g_back > 1.15f) {
+        /* while it has you there is nothing else on the screen */
+        g_hud_n = 0;
+        g_hud_cache[0] = 0;
+    } else if (g_gate_t > 0.0f || g_back > 0.0f) {
         /* A threshold has to land as an event, not as a digit changing in
          * the corner. The readout gets out of the way and the screen says
          * where you are, in the same lettering the monitor uses. */
