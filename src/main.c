@@ -333,6 +333,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     int    shot_live = 0;     /* -live: keep sounding right up to the shot */
     int    shot_still = 0;    /* -still: sound from where you stand, never walk */
     float  shot_yaw = -1e9f;  /* -yaw D: face this way instead of down the passage */
+    int    win_back = 0;      /* -back: open behind everything, and stay there */
     int    shot_enter = 0;    /* -enter N: press Enter once, at frame N */
     float  start_depth = START_DEPTH;
     shot_path[0] = 0;
@@ -378,6 +379,11 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     if (cmd && strstr(cmd, "-live")) shot_live = 1;
     if (cmd && strstr(cmd, "-still")) shot_still = 1;
     if (cmd && strstr(cmd, "-yaw")) sscanf(strstr(cmd, "-yaw") + 4, "%f", &shot_yaw);
+    /* -back is for a demo left running beside real work: it opens without
+       taking the foreground and sits under every other window until it is
+       clicked on. A capture always wants this; a real run never does. */
+    if (cmd && strstr(cmd, "-back")) win_back = 1;
+    if (g_headless) win_back = 1;
     if (cmd && strstr(cmd, "-enter")) sscanf(strstr(cmd, "-enter") + 6, "%d", &shot_enter);
 
     ZeroMemory(&wc, sizeof wc);
@@ -465,8 +471,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
                            : (unsigned)(start.QuadPart ^ (start.QuadPart >> 32)),
               start_depth);
 
-    ShowWindow(hwnd, g_headless ? SW_SHOWNOACTIVATE : SW_SHOW);
-    if (g_headless)
+    ShowWindow(hwnd, win_back ? SW_SHOWNOACTIVATE : SW_SHOW);
+    if (win_back)
         /* Off the side of the desktop is not far enough: a window manager
          * that keeps it on screen anyway still puts it over whatever the
          * machine is being used for. Send it to the bottom of the stack as
