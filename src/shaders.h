@@ -20,6 +20,7 @@ static const char *POINT_VS =
 "uniform float uBase;\n"
 "uniform float uFade;\n"
 "uniform float uGrey;\n"
+"uniform float uMonster;\n"
 "out float vBright;\n"
 "out float vDist;\n"
 "void main(){\n"
@@ -49,6 +50,12 @@ static const char *POINT_VS =
 "  float lit = max(max(max(front, memory), close), uBase);\n"
 "  vBright = mix(lit, 1.0, uFlat) * min(aGain, 1.45) * uFade;\n"
 "  gl_PointSize = mix(clamp(230.0 / max(clip.w, 0.25), 2.0, 5.4), 2.0, uFlat);\n"
+/* A returned mark is one speck of a wall and the cloud is sparse, so it is
+   drawn fat enough to be seen. A monster is six thousand points inside a body
+   a metre wide -- at the same size that is fifty times over the same pixels,
+   and every one of them came back as a solid white blot with no legs, no head
+   and no hollow under it. Thinner points give the density back as shape. */
+"  if (uMonster > 0.5) gl_PointSize = clamp(90.0 / max(clip.w, 0.25), 1.6, 2.6);\n"
 "}\n";
 
 static const char *POINT_FS =

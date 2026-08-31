@@ -76,8 +76,21 @@
 #define GATE_W           5.0f  /* and how long it runs
  */
 
-#define MON_POINTS      2800   /* limbs need volume, not a dotted line */
-#define LEG_TUBE           6   /* points around the curve at each sample */
+/* The debug spawn used to put a monster off the edge of the frame, so nobody
+ * had ever actually looked at one: 2,800 points over eight double-jointed legs
+ * is six specks per ring, and what came back on a sounding was a dotted
+ * outline. A shape you have to finish in your head is not frightening, it is
+ * a puzzle. Doubled, and the extra goes into the parts that carry the horror
+ * -- the mass of the body, the hung head, and legs solid enough to be legs.
+ * 120 KB of RAM, nothing on disk, and the frame already draws 1.2 M points. */
+#define MON_POINTS      6000
+#define LEG_TUBE          10   /* points around the curve at each sample */
+#define LEG_RINGS         58   /* samples along it */
+/* Points add. Twice as many of them at the old per-point gain turned the whole
+ * animal into one solid white blot with no legs, no head and no hollow under
+ * the body -- brighter, and less of a monster. This gives the extra density
+ * back as shape instead of as light. */
+#define MON_GAIN       0.47f
 #define MAX_MON           12
 #define MON_KILL_DIST   1.05f
 #define WALL_HUG       0.34f   /* how far off the rock it rides */
@@ -855,7 +868,7 @@ static void mon_emit_points(const Monster *m, float now)
     sd[1] = n[2]*f[0] - n[0]*f[2];
     sd[2] = n[0]*f[1] - n[1]*f[0];
 
-#define PUT(A, B, C, G)     do { if (w < MON_POINTS) {         g_mpts[w].x = m->x + f[0]*(A) + sd[0]*(B) + n[0]*(C);         g_mpts[w].y = m->y + f[1]*(A) + sd[1]*(B) + n[1]*(C);         g_mpts[w].z = m->z + f[2]*(A) + sd[2]*(B) + n[2]*(C);         g_mpts[w].reveal = now; g_mpts[w].gain = (G); w++; } } while (0)
+#define PUT(A, B, C, G)     do { if (w < MON_POINTS) {         g_mpts[w].x = m->x + f[0]*(A) + sd[0]*(B) + n[0]*(C);         g_mpts[w].y = m->y + f[1]*(A) + sd[1]*(B) + n[1]*(C);         g_mpts[w].z = m->z + f[2]*(A) + sd[2]*(B) + n[2]*(C);         g_mpts[w].reveal = now; g_mpts[w].gain = (G) * MON_GAIN; w++; } } while (0)
 
     /* The body rides on the legs, so it rises and falls with them. Held at
      * a fixed height off the rock it walked like something on rails; half a
@@ -872,7 +885,7 @@ static void mon_emit_points(const Monster *m, float now)
      * it. The head used to sit against the body like a second ball; slung
      * forward on a neck it reads as something carried out in front, which is
      * worse to have coming at you. */
-    for (i = 0; i < (m->type == T_LISTENER ? 70 : 260); i++) {
+    for (i = 0; i < (m->type == T_LISTENER ? 190 : 430); i++) {
         float a = hash1((float)i * 1.7f + m->seed) * 6.2831853f;
         float b = hash1((float)i * 3.1f + m->seed + 4.0f) * 3.1415927f;
         float r = 0.26f * sc * br * (float)pow(hash1((float)i * 5.3f + m->seed), 0.34);
@@ -880,15 +893,15 @@ static void mon_emit_points(const Monster *m, float now)
              r*(float)sin(b)*(float)sin(a),
              bob + r*(float)cos(b) * 0.75f, 1.0f);
     }
-    for (i = 0; i < 34; i++) {          /* the neck */
-        float u = (float)i / 33.0f;
+    for (i = 0; i < 60; i++) {          /* the neck */
+        float u = (float)i / 59.0f;
         float a = hash1((float)i * 6.1f + m->seed + 7.0f) * 6.2831853f;
         float r = 0.055f * sc;
         PUT(0.10f * sc + u * 0.22f * sc + r*(float)cos(a),
             r*(float)sin(a) * 0.7f,
             bob - u * 0.10f * sc + r*(float)sin(a) * 0.7f, 0.85f);
     }
-    for (i = 0; i < 95; i++) {          /* the head, hung low and forward */
+    for (i = 0; i < 180; i++) {         /* the head, hung low and forward */
         float a = hash1((float)i * 2.3f + m->seed + 9.0f) * 6.2831853f;
         float b = hash1((float)i * 4.7f + m->seed + 2.0f) * 3.1415927f;
         float r = 0.115f * sc;
@@ -896,9 +909,9 @@ static void mon_emit_points(const Monster *m, float now)
             r*(float)sin(b)*(float)sin(a),
             bob - 0.10f * sc + r*(float)cos(b) * 0.8f, 1.0f);
     }
-    for (i = 0; i < 26; i++) {          /* a pair of them, in front of that */
-        float u    = (float)(i % 13) / 12.0f;
-        float side = (i < 13) ? 1.0f : -1.0f;
+    for (i = 0; i < 50; i++) {          /* a pair of them, in front of that */
+        float u    = (float)(i % 25) / 24.0f;
+        float side = (i < 25) ? 1.0f : -1.0f;
         PUT(0.44f * sc + u * 0.14f * sc,
             side * (0.048f - u * 0.032f) * sc,
             bob - 0.10f * sc - u * 0.050f * sc, 1.0f);
@@ -932,8 +945,8 @@ static void mon_emit_points(const Monster *m, float now)
             k2x = ex * 0.76f; k2y = ey * 0.79f; k2z = 0.30f * sc;
         }
 
-        for (k = 0; k < 46; k++) {
-            float u   = (float)k / 45.0f;
+        for (k = 0; k < LEG_RINGS; k++) {
+            float u   = (float)k / (float)(LEG_RINGS - 1);
             float iu  = 1.0f - u;
             float w3  = 3.0f * iu * iu * u, w2 = 3.0f * iu * u * u, w1 = u * u * u;
             float a   = w3 * k1x + w2 * k2x + w1 * ex;
@@ -2920,13 +2933,20 @@ void game_debug_yaw(float deg)
 void game_debug_spider(float now, int type)
 {
     Monster *m = &g_mon[0];
-    float pos[3], n[3];
+    float f2[3], r2[3], u2[3], n[3], t;
     g_mon_count = 1;
     m->seed = 4.0f + (float)type;
-    /* straight ahead and at eye level: the point of this is to look at it,
-     * and on the ceiling six metres up it was out of frame */
-    wall_spot(g_pz - 3.2f, 3.1415927f, pos);
-    m->x = pos[0]; m->y = pos[1]; m->z = pos[2];
+    /* Wherever the camera is actually pointed, on the first wall it meets.
+     * The old fixed angle round the tunnel put it out past the edge of the
+     * frame at three metres, so every capture ever taken of a monster was a
+     * few red legs reaching in from the left with the body off-screen -- and
+     * "make them more frightening" could not be judged from one. */
+    basis(g_yaw, g_pitch, f2, r2, u2);
+    if (!cave_ray(g_px, g_py, g_pz, f2[0], f2[1], f2[2], 30.0f, &t)) t = 6.0f;
+    if (t < 4.0f) t = 4.0f;
+    m->x = g_px + f2[0] * t;
+    m->y = g_py + f2[1] * t;
+    m->z = g_pz + f2[2] * t;
     cave_normal(m->x, m->y, m->z, n);
     m->nx = n[0]; m->ny = n[1]; m->nz = n[2];
     m->dx = 0.0f; m->dy = 0.0f; m->dz = 1.0f;
