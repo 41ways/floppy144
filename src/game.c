@@ -790,7 +790,12 @@ static void mon_feet(Monster *m, float dt, const float *f, const float *sd, cons
 
         if (m->ft[i] < 1.0f) {             /* mid-step */
             float u, e, lift;
-            m->ft[i] += dt / SWING_TIME;
+            /* Every leg took exactly as long as every other one, so the
+             * two halves of the gait came down like a metronome. Give each
+             * its own swing and the tetrapod rhythm stays but stops being
+             * countable. */
+            m->ft[i] += dt / (SWING_TIME
+                              * (0.76f + hash1((float)i * 2.71f + m->seed) * 0.54f));
             if (m->ft[i] > 1.0f) m->ft[i] = 1.0f;
             u = m->ft[i];
             e = u * u * (3.0f - 2.0f * u);
@@ -834,6 +839,7 @@ static void mon_emit_points(const Monster *m, float now)
 {
     float n[3], f[3], sd[3], len;
     float sc = m->scale;
+    float bob, br;
     int i, k, w = 0;
 
     n[0] = m->nx; n[1] = m->ny; n[2] = m->nz;
@@ -850,22 +856,51 @@ static void mon_emit_points(const Monster *m, float now)
 
 #define PUT(A, B, C, G)     do { if (w < MON_POINTS) {         g_mpts[w].x = m->x + f[0]*(A) + sd[0]*(B) + n[0]*(C);         g_mpts[w].y = m->y + f[1]*(A) + sd[1]*(B) + n[1]*(C);         g_mpts[w].z = m->z + f[2]*(A) + sd[2]*(B) + n[2]*(C);         g_mpts[w].reveal = now; g_mpts[w].gain = (G); w++; } } while (0)
 
-    /* body: a squat abdomen and a smaller head slung forward */
+    /* The body rides on the legs, so it rises and falls with them. Held at
+     * a fixed height off the rock it walked like something on rails; half a
+     * centimetre of bob is the difference between a machine and an animal. */
+    {   float ph = 0.0f;
+        for (i = 0; i < 8; i++)
+            ph += (float)sin(3.1415927f * (m->ft[i] < 1.0f ? m->ft[i] : 1.0f));
+        bob = (ph * 0.125f - 0.22f) * 0.13f * sc;
+    }
+    /* and it breathes, slowly, whether or not it is doing anything else */
+    br = 1.0f + 0.055f * (float)sin(now * 2.1f + m->seed * 3.0f);
+
+    /* body: a swollen abdomen, a thin neck, and a head hung off the end of
+     * it. The head used to sit against the body like a second ball; slung
+     * forward on a neck it reads as something carried out in front, which is
+     * worse to have coming at you. */
     for (i = 0; i < (m->type == T_LISTENER ? 70 : 260); i++) {
         float a = hash1((float)i * 1.7f + m->seed) * 6.2831853f;
         float b = hash1((float)i * 3.1f + m->seed + 4.0f) * 3.1415927f;
-        float r = 0.26f * sc * (float)pow(hash1((float)i * 5.3f + m->seed), 0.34);
-        PUT(-0.10f * sc + r*(float)sin(b)*(float)cos(a) * 1.25f,
+        float r = 0.26f * sc * br * (float)pow(hash1((float)i * 5.3f + m->seed), 0.34);
+        PUT(-0.13f * sc + r*(float)sin(b)*(float)cos(a) * 1.25f,
              r*(float)sin(b)*(float)sin(a),
-             r*(float)cos(b) * 0.75f, 1.0f);
+             bob + r*(float)cos(b) * 0.75f, 1.0f);
     }
-    for (i = 0; i < 95; i++) {
+    for (i = 0; i < 34; i++) {          /* the neck */
+        float u = (float)i / 33.0f;
+        float a = hash1((float)i * 6.1f + m->seed + 7.0f) * 6.2831853f;
+        float r = 0.055f * sc;
+        PUT(0.10f * sc + u * 0.22f * sc + r*(float)cos(a),
+            r*(float)sin(a) * 0.7f,
+            bob - u * 0.10f * sc + r*(float)sin(a) * 0.7f, 0.85f);
+    }
+    for (i = 0; i < 95; i++) {          /* the head, hung low and forward */
         float a = hash1((float)i * 2.3f + m->seed + 9.0f) * 6.2831853f;
         float b = hash1((float)i * 4.7f + m->seed + 2.0f) * 3.1415927f;
-        float r = 0.13f * sc;
-        PUT(0.26f * sc + r*(float)sin(b)*(float)cos(a),
+        float r = 0.115f * sc;
+        PUT(0.36f * sc + r*(float)sin(b)*(float)cos(a),
             r*(float)sin(b)*(float)sin(a),
-            r*(float)cos(b) * 0.8f, 1.0f);
+            bob - 0.10f * sc + r*(float)cos(b) * 0.8f, 1.0f);
+    }
+    for (i = 0; i < 26; i++) {          /* a pair of them, in front of that */
+        float u    = (float)(i % 13) / 12.0f;
+        float side = (i < 13) ? 1.0f : -1.0f;
+        PUT(0.44f * sc + u * 0.14f * sc,
+            side * (0.048f - u * 0.032f) * sc,
+            bob - 0.10f * sc - u * 0.050f * sc, 1.0f);
     }
 
     /* Eight legs drawn to wherever their feet are actually standing. The
@@ -879,17 +914,31 @@ static void mon_emit_points(const Monster *m, float now)
         float ex = wx*f[0] + wy*f[1] + wz*f[2];
         float ey = wx*sd[0] + wy*sd[1] + wz*sd[2];
         float ez = wx*n[0] + wy*n[1] + wz*n[2];
-        float kx, ky, kz;
-        if (m->type == T_LISTENER) { kx = ex * 0.55f; ky = ey * 0.55f; kz = 0.30f * sc; }
-        else { kx = ex * 0.42f; ky = ey * 0.46f; kz = 0.88f * sc; }
+        /* No two of them are built the same. Eight identical legs is a
+         * machine; eight that disagree about how long they are is a thing
+         * that grew. */
+        float lv = 0.68f + hash1((float)i * 3.37f + m->seed * 2.0f) * 0.74f;
+        float tk = 0.72f + hash1((float)i * 5.11f + m->seed * 4.0f) * 0.66f;
+        float k1x, k1y, k1z, k2x, k2y, k2z;
+        /* Two joints, not one. A knee that rises above the body and a shin
+         * that comes back down to the foot is what a spider's leg does, and
+         * a single arc never looked like anything but a hoop. */
+        if (m->type == T_LISTENER) {
+            k1x = ex * 0.32f; k1y = ey * 0.34f; k1z = 0.44f * sc * lv;
+            k2x = ex * 0.80f; k2y = ey * 0.82f; k2z = 0.10f * sc;
+        } else {
+            k1x = ex * 0.26f; k1y = ey * 0.30f; k1z = 1.22f * sc * lv;
+            k2x = ex * 0.76f; k2y = ey * 0.79f; k2z = 0.30f * sc;
+        }
 
         for (k = 0; k < 46; k++) {
             float u   = (float)k / 45.0f;
             float iu  = 1.0f - u;
-            float a   = 2.0f * iu * u * kx + u * u * ex;
-            float b2  = 2.0f * iu * u * ky + u * u * ey;
-            float c2  = 2.0f * iu * u * kz + u * u * ez;
-            float rad = (0.175f * iu * iu + 0.028f) * sc
+            float w3  = 3.0f * iu * iu * u, w2 = 3.0f * iu * u * u, w1 = u * u * u;
+            float a   = w3 * k1x + w2 * k2x + w1 * ex;
+            float b2  = w3 * k1y + w2 * k2y + w1 * ey;
+            float c2  = w3 * k1z + w2 * k2z + w1 * ez + bob * iu * iu;
+            float rad = (0.175f * iu * iu + 0.028f) * sc * tk
                       * (m->type == T_LISTENER ? 0.40f : 1.0f);
             int   q;
             for (q = 0; q < LEG_TUBE; q++) {
@@ -2691,7 +2740,9 @@ void game_debug_spider(float now, int type)
     float pos[3], n[3];
     g_mon_count = 1;
     m->seed = 4.0f + (float)type;
-    wall_spot(g_pz - 6.0f, 0.10f, pos);
+    /* straight ahead and at eye level: the point of this is to look at it,
+     * and on the ceiling six metres up it was out of frame */
+    wall_spot(g_pz - 3.2f, 3.1415927f, pos);
     m->x = pos[0]; m->y = pos[1]; m->z = pos[2];
     cave_normal(m->x, m->y, m->z, n);
     m->nx = n[0]; m->ny = n[1]; m->nz = n[2];
