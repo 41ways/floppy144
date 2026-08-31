@@ -9,3 +9,4 @@ shotlog*.txt
 faillog.txt
 *.raw
 *.png
+probe.txt
