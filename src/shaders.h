@@ -398,7 +398,10 @@ static const char *CAVE_FS =
 "  float boxm = min(slab, pil);\n"
 /* the maze: a wall every seventh metre with one doorway, stubs off the
    pillars - rooms that stop, and one way that always leads on */
-"  {\n"
+/* but not on the road. Through the door there is no room, there is distance,
+   and a wall every seventh metre is a room -- the last thing the ending wants
+   is the maze slamming shut in front of the reveal. Pillars only. */
+"  if (uRoad < 0.5) {\n"
 "    float rz = mod(p.z + 3.5, 7.0) - 3.5;\n"
 "    float ri = floor((-p.z + 3.5) / 7.0);\n"
 "    vec2  rc = centre(ri * -7.0 + 3.5);\n"
@@ -418,7 +421,9 @@ static const char *CAVE_FS =
 "    }\n"
 "  }\n"
 "  m = mix(m, boxm, uRoom);\n"
-"  if (uRoad < 0.5) m = min(m, p.z + 525.0);\n"
+/* 526, matching WAKE_Z in cave_sdf. It said 525, so the end wall was drawn a
+   metre nearer than the one you actually stop against. */
+"  if (uRoad < 0.5) m = min(m, p.z + 526.0);\n"
 "  int i0 = int(clamp(-p.z/34.0, 0.0, 14.0));\n"
 "  m = max(m, 1.75 - segd(p, uBrA[i0],   uBrB[i0]));\n"
 "  m = max(m, 1.75 - segd(p, uBrA[i0+1], uBrB[i0+1]));\n"

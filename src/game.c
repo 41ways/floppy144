@@ -1518,7 +1518,13 @@ static void new_attempt(unsigned seed, float now)
     g_wander = 0.80f + rndf() * 0.45f;      /* 0.80 .. 1.25 */
     g_rough  = 0.70f + rndf() * 0.70f;      /* 0.70 .. 1.40 */
     build_branches();
+    /* Both, or neither. Resetting the count without the cursor left the title's
+     * own letters sitting at the front of the ring as the first thing drawn,
+     * while every mark the first soundings made landed past the end of what
+     * was being drawn -- so a run opened with SOUNDING lying on the floor of
+     * the cave and a few seconds of clicking at nothing. */
     g_count  = 0;
+    g_head   = 0;
     g_pings  = 0;
     g_heard  = 0;
     g_heard_n = 0;
@@ -2205,6 +2211,17 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
         g_pz   -= 6.8f * dt;
         g_yaw  *= (float)exp(-dt * 3.0f);
         g_pitch *= (float)exp(-dt * 3.0f);
+        {   /* The eye has to follow the corridor down it. It did not: g_py was
+             * left wherever the door was while the passage wandered a couple
+             * of metres either way underneath it, so the four seconds that are
+             * supposed to be distance opening up were spent inside a slab, or
+             * nose-down on a floor with the horizon up at the top of the
+             * screen. Nothing was wrong with the road; nobody was on it. */
+            float cx, cy, k2 = 1.0f - (float)exp(-dt * 4.0f);
+            tunnel_centre(g_pz, &cx, &cy);
+            g_px += (cx - g_px) * k2;
+            g_py += (cy - g_py) * k2;
+        }
         wt = smoothstep01(1.1f, 3.6f, g_road);
 
         glClearColor(wt, wt, wt, 1.0f);
