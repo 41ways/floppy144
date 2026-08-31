@@ -7,9 +7,23 @@ git pull origin main
 읽는 순서: `docs/DESIGN.md`(전체 설계) → 이 문서 → `src/game.c` 상단 tuning 블록.
 
 ## 빌드·실행의 현실
-- 코드는 **Win32 전용** (WGL·waveOut·GDI). 맥에서는 **빌드도 실행도 안 됨** — 맥에서의 작업은 코드 수정 + 푸시까지.
+- 코드는 **Win32 전용** (WGL·waveOut·GDI). 단 맥에서도 **빌드·실행 둘 다 됨** (아래 "맥에서 돌리기") — 푸시 없이 로컬 검증 가능.
 - 푸시하면 GitHub Actions가 mingw-w64로 크로스 컴파일, 1,474,560B 게이트 검사, `SOUNDING-win64` 아티팩트 업로드 + **releases/latest 자동 갱신** (로그인 불필요): https://github.com/41ways/floppy144/releases/download/latest/SOUNDING.exe
 - 윈도우 PC에서 받기: `sh update.sh` 또는 위 링크. 로컬 빌드(윈도우): WinLibs mingw 설치돼 있음, `Makefile` 참조.
+
+## 맥에서 돌리기 (2026-08-31 확인, Apple Silicon)
+```bash
+brew install mingw-w64                        # 크로스 컴파일러
+brew install --cask wine-stable --skip-cask-deps   # gstreamer는 sudo를 요구하고 이 게임엔 불필요
+xattr -dr com.apple.quarantine "/Applications/Wine Stable.app"   # 안 하면 wine이 SIGKILL로 즉사
+wine reg add 'HKCU\Software\Wine\Drivers' /v Audio /d '' /f   # 무음 (녹음할 때)
+make && wine dist/SOUNDING.exe "-shot shot.raw 200 9999"
+python3 tools/raw2png.py .                    # shot.raw → shot.png
+```
+- `make`가 맥에서 그대로 동작(Makefile의 `origin CC` 분기가 mingw를 집어줌). `make size` 게이트도 동작.
+- Wine 11.0 + Metal 백엔드에서 렌더링·HUD·`-shot` 덤프까지 정상. **음향(waveOut)과 실시간 입력은 미검증** — 실기 확인은 여전히 윈도우 PC 몫.
+- 위 Audio 레지스트리를 비우면 prefix 전체가 무음이 된다(`waveOutOpen` 실패 → `audio.c`가 `g_ready=0`으로 무음 진행, `waveOutWrite` 0회). 소리를 되살리려면 `/d 'coreaudio'`로 다시 쓰면 됨.
+- macOS의 GL은 core 3.2+를 forward-compatible로만 내주기 때문에, `main.c`가 core 컨텍스트 생성에 실패하면 forward-compatible로 한 번 더 시도한다. 윈도우 드라이버는 첫 번째 요청에서 성공하므로 영향 없음.
 
 ## 테스트 하네스 (맥에서 코드만 보고도 검증 설계 가능)
 - `SOUNDING.exe "-shot <파일.raw> <프레임> <핑주기> [거미타입]"` — 고정 시드·고정 타임스텝 스크립트 런. 프레임버퍼를 raw로 덤프, `shotlog.txt`에 20프레임마다 `state/pos/travelled`, 셰이더 에러는 `faillog.txt`(모달 대신).

@@ -335,6 +335,13 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
         WGL_CONTEXT_PROFILE_MASK_ARB,  WGL_CONTEXT_CORE_PROFILE_BIT_ARB,
         0
     };
+    const int ctx_fwd_attribs[] = {
+        WGL_CONTEXT_MAJOR_VERSION_ARB, 3,
+        WGL_CONTEXT_MINOR_VERSION_ARB, 3,
+        WGL_CONTEXT_PROFILE_MASK_ARB,  WGL_CONTEXT_CORE_PROFILE_BIT_ARB,
+        WGL_CONTEXT_FLAGS_ARB,         WGL_CONTEXT_FORWARD_COMPATIBLE_BIT_ARB,
+        0
+    };
 
     (void)prev; (void)show;
 
@@ -399,6 +406,11 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
         fail("No usable OpenGL pixel format on this display.");
 
     rc = p_wglCreateContextAttribsARB(dc, 0, ctx_attribs);
+    /* Wine on macOS refuses a plain core context: its GL sits on top of the
+     * system one, which only grants 3.2+ core when asked for forward-compatible.
+     * Real Windows drivers take the first request, so this second one costs
+     * them nothing and buys a working -shot harness on a Mac. */
+    if (!rc) rc = p_wglCreateContextAttribsARB(dc, 0, ctx_fwd_attribs);
     if (!rc || !wglMakeCurrent(dc, rc))
         fail("Could not create an OpenGL 3.3 core context.\n"
              "Update your graphics driver and try again.");

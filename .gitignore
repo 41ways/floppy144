@@ -6,3 +6,6 @@ dist/
 .vscode/
 .idea/
 shotlog.txt
+faillog.txt
+*.raw
+*.png
