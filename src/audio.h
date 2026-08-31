@@ -18,6 +18,9 @@ void audio_stroke(void);   /* an arm pulling through the water */
 void audio_submerged(int under);  /* everything above 500 Hz leaves */
 void audio_flatline(void);        /* the monitor giving up */
 void audio_defib(void);           /* the crash team, from the other side */
+void audio_beat(void);            /* one beat of the heart running the lights */
+void audio_door(void);            /* a heavy door letting go */
+void audio_lampout(void);         /* the bulb, and then nothing */
 void audio_step(float wet);       /* a footfall; 1 = straight out of the water */
 void audio_set_volume(float v);   /* the settings slider, 0..1 */
 float audio_get_volume(void);

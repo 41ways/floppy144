@@ -26,7 +26,7 @@
 #define AP_LEN       1051
 
 enum { V_PING, V_ROAR, V_ROAR_HI, V_ROAR_LO, V_HIT, V_BEEP, V_SPLASH, V_FLAT, V_HUM,
-       V_STROKE, V_DEFIB, V_STEP };
+       V_STROKE, V_DEFIB, V_STEP, V_BEAT, V_DOOR, V_LAMPOUT };
 
 typedef struct {
     int   active;
@@ -121,6 +121,23 @@ static float voice_sample(Voice *v)
            + (float)sin(6.2831853 * 2400.0 * v->t) * (float)exp(-x * 13.0) * 0.22f
            + (float)sin(6.2831853 * 62.0 * v->t) * (float)exp(-x * 9.0) * 0.35f) * 0.30f;
         s = dry * (1.0f - 0.35f * w) + wet * w;
+    } else if (v->kind == V_DOOR) {
+        /* the latch, then the weight of it swinging */
+        float cl = frand() * (float)exp(-x * 40.0) * 0.8f;
+        float sw = (float)sin(6.2831853 * (70.0 - 26.0 * x) * v->t)
+                 * (float)exp(-x * 3.4) * 0.5f;
+        s = (cl + sw) * 0.34f;
+    } else if (v->kind == V_LAMPOUT) {
+        /* a filament letting go: a tick, a breath of hum, and silence */
+        float tk = frand() * (float)exp(-x * 60.0);
+        float hm = (float)sin(6.2831853 * 120.0 * v->t) * (float)exp(-x * 26.0);
+        s = (tk * 0.9f + hm * 0.5f) * 0.40f;
+    } else if (v->kind == V_BEAT) {
+        /* The lights striking: the thump of the heart under it, and the tick
+         * of a tube igniting over the top. */
+        float th = (float)sin(6.2831853 * 46.0 * v->t) * (float)exp(-x * 9.0);
+        float tk = frand() * (float)exp(-x * 34.0);
+        s = (th * 0.75f + tk * 0.35f) * 0.30f;
     } else if (v->kind == V_DEFIB) {
         /* the whine of the charge, the thump of it landing, and two beats of
          * a heart deciding to continue */
@@ -299,6 +316,9 @@ void audio_roar(int type)
 void audio_hum(void)  { voice_start(V_HUM, 24.0f); }
 void audio_stroke(void) { voice_start(V_STROKE, 0.62f); }
 void audio_defib(void)  { voice_start(V_DEFIB, 2.60f); }
+void audio_beat(void)   { voice_start(V_BEAT, 0.45f); }
+void audio_door(void)   { voice_start(V_DOOR, 1.30f); }
+void audio_lampout(void){ voice_start(V_LAMPOUT, 0.55f); }
 /* wet is 0 for a dry shoe and 1 straight out of the water */
 void audio_step(float wet)
 { voice_startp(V_STEP, 0.16f + 0.26f * wet, wet); }

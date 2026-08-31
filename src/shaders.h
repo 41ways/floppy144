@@ -350,6 +350,12 @@ static const char *CAVE_FS =
 "uniform float uRoad;     // past the door: no walls end it\n"
 "uniform float uWhite;    // and the world goes to white\n"
 "uniform float uPulse;    // the beat you feel as the door nears\n"
+"uniform float uHospY;    // the height the building is built at\n"
+"uniform float uBlink;    // the heart, in the fluorescents\n"
+"uniform float uCorrX;    // the corridor runs down this line\n"
+"uniform float uDoor;     // 1 once it is open\n"
+"uniform float uLampOut;  // 1 once the bulb has gone\n"
+
 "\n"
 "uniform vec3  uBrA[16];\n"
 "uniform vec3  uBrB[16];\n"
@@ -382,6 +388,32 @@ static const char *CAVE_FS =
 "  float t = clamp(dot(pa,ba)/max(dot(ba,ba),1e-6), 0.0, 1.0);\n"
 "  return length(pa - ba*t); }\n"
 "\n"
+/* The same rooms game.c walks through. Both have to agree or you can see
+   through a wall you cannot pass, so this is a transcription, not a
+   second design. */
+"bool openN(float cx, float cz){\n"
+"  return h1(cx * 13.31 + cz * 7.77 + uSeed) < 0.62; }\n"
+"bool openW(float cx, float cz){\n"
+"  float h = h1(cx * 5.19 - cz * 11.03 + uSeed * 3.0);\n"
+"  if (h < 0.34) return true;\n"
+"  return !openN(cx, cz); }\n"
+"float roomsAir(vec3 p, float floorY){\n"
+"  float air = 1.55 - abs(p.y - floorY - 1.30);\n"
+"  float cx = floor(p.x / 7.0), cz = floor(p.z / 7.0);\n"
+"  for (int i = 0; i <= 1; i++)\n"
+"  for (int j = 0; j <= 1; j++) {\n"
+"    float ax = cx + float(i), az = cz + float(j);\n"
+"    float bx = ax * 7.0, bz = az * 7.0;\n"
+"    float d1 = abs(p.z - bz) - 0.22;\n"
+"    float o1 = h1(ax * 3.7 + az * 9.1 + uSeed) - 0.5;\n"
+"    float c1 = bx + 3.5 + o1 * (7.0 - 1.35 * 2.4);\n"
+"    if (!openN(ax, az) || abs(p.x - c1) > 1.35) air = min(air, d1);\n"
+"    float d2 = abs(p.x - bx) - 0.22;\n"
+"    float o2 = h1(ax * 8.3 - az * 2.9 + uSeed) - 0.5;\n"
+"    float c2 = bz + 3.5 + o2 * (7.0 - 1.35 * 2.4);\n"
+"    if (!openW(ax, az) || abs(p.z - c2) > 1.35) air = min(air, d2);\n"
+"  }\n"
+"  return air; }\n"
 "float field(vec3 p){\n"
 "  vec2 c = centre(p.z);\n"
 "  vec2 d2 = vec2(p.x - c.x, (p.y - c.y) * 1.25);\n"
@@ -404,38 +436,31 @@ static const char *CAVE_FS =
 /* Toward the end the tunnel forgets how to be a tunnel. A box corridor
    with the same axis takes over, corners first: the cave becomes
    architecture around you before there is a room. */
-"  float slab = 1.45 - abs(p.y - c.y + 0.3);\n"
-"  vec2 mp = mod(p.xz + 3.5, 7.0) - 3.5;\n"
-"  float pil = max(abs(mp.x), abs(mp.y)) - 0.42;\n"
-"  float boxm = min(slab, pil);\n"
-/* the maze: a wall every seventh metre with one doorway, stubs off the
-   pillars - rooms that stop, and one way that always leads on */
-/* but not on the road. Through the door there is no room, there is distance,
-   and a wall every seventh metre is a room -- the last thing the ending wants
-   is the maze slamming shut in front of the reveal. Pillars only. */
-"  if (uRoad < 0.5) {\n"
-"    float rz = mod(p.z + 3.5, 7.0) - 3.5;\n"
-"    float ri = floor((-p.z + 3.5) / 7.0);\n"
-"    vec2  rc = centre(ri * -7.0 + 3.5);\n"
-"    float gx = rc.x + (h1(ri * 7.77 + uSeed * 2.0) - 0.5) * 16.0;\n"
-"    float wd = abs(rz) - 0.20;\n"
-"    if (abs(p.x - gx) > 1.60 && wd < boxm) boxm = wd;\n"
-"    float ci = floor((p.x + 3.5) / 7.0) * 57.0 + ri;\n"
-"    float hs = h1(ci * 3.17 + uSeed);\n"
-"    if (hs < 0.18) { if (mp.y > 0.40 && mp.y < 3.12) {\n"
-"      float w2 = abs(mp.x) - 0.17; if (w2 < boxm) boxm = w2; } }\n"
-"    else if (hs < 0.36) { if (mp.x > 0.40 && mp.x < 3.12) {\n"
-"      float w2 = abs(mp.y) - 0.17; if (w2 < boxm) boxm = w2; } }\n"
-"    {\n"
-"      float open2 = min(1.60 - abs(p.x - gx), 1.60 - abs(rz));\n"
-"      open2 = min(open2, slab);\n"
-"      boxm = max(boxm, open2);\n"
-"    }\n"
+"  float st2  = smoothstep(244.0, 259.0, -p.z);\n"
+"  float cyh  = mix(c.y, uHospY, st2);\n"
+"  float boxm = roomsAir(p, cyh - 1.35);\n"
+"  float dep = -p.z;\n"
+"  if (dep > 526.0 - 20.0) {\n"
+"    float fl2 = cyh - 1.35;\n"
+"    float cor = min(1.9 - abs(p.x - uCorrX), 1.55 - abs(p.y - fl2 - 1.30));\n"
+"    boxm = mix(boxm, cor, smoothstep(526.0 - 20.0, 526.0 - 15.0, dep));\n"
+"  }\n"
+"  if (dep > 526.0 + 1.2) {\n"
+"    float fl3 = cyh - 1.35;\n"
+"    boxm = min(min(15.0 - abs(p.x - uCorrX),\n"
+"                   1.75 - abs(p.y - fl3 - 1.45)), (552.0 + 14.0) - dep);\n"
 "  }\n"
 "  m = mix(m, boxm, uRoom);\n"
 /* 526, matching WAKE_Z in cave_sdf. It said 525, so the end wall was drawn a
    metre nearer than the one you actually stop against. */
-"  if (uRoad < 0.5) m = min(m, p.z + 526.0);\n"
+"  if (uRoad < 0.5) m = min(m, p.z + (552.0 + 14.0));\n"
+"  if (dep > 525.6 && dep < 526.4) {\n"
+"    float leaf = abs(dep - 526.0) - 0.18;\n"
+"    float gx2  = 1.05 - abs(p.x - uCorrX);\n"
+"    float d3   = (uDoor > 0.5 && gx2 > 0.0) ? 1000.0 : leaf;\n"
+"    if (gx2 < 0.0) d3 = 1000.0;\n"
+"    m = min(m, d3);\n"
+"  }\n"
 "  int i0 = int(clamp(-p.z/34.0, 0.0, 14.0));\n"
 /* narrowed where the corridor takes over -- mirrors branch_air */
 "  float brk = 1.75 * (1.0 - 0.42 * smoothstep(368.0, 476.0, -p.z));\n"
@@ -648,7 +673,7 @@ static const char *CAVE_FS =
 "  }\n"
 "\n"
 "  vec2 lc = centre(uCam.z - 20.0);\n"
-"  vec3 lp = vec3(lc.x, lc.y + 0.6, max(uCam.z - 20.0, -521.5));\n"
+"  vec3 lp = vec3(lc.x, lc.y + 0.6, max(uCam.z - 20.0, -540.0));\n"
 "  vec3 ld = normalize(lp - p);\n"
 /* Wrapped diffuse: rock in a cave is lit by everything the light has
    already touched, so the terminator softens instead of cutting to
@@ -679,7 +704,11 @@ static const char *CAVE_FS =
    diffuse plus a Blinn lobe each, falling off with distance squared. */
 "  if (uRoom > 0.15) {\n"
 "    vec2 base = floor((p.xz - vec2(3.5)) / 7.0) * 7.0 + vec2(3.5);\n"
-"    vec3 pan = vec3(1.00, 0.97, 0.86) * uRoom;\n"
+/* Every fitting in the place is on the same heart. Between beats they
+   sit low; on the beat the whole floor plan goes white for a moment,
+   which is the only light you are given and the only thing the things
+   in here are afraid of. */
+"    vec3 pan = vec3(1.00, 0.97, 0.86) * uRoom * (0.42 + 1.75 * uBlink);\n"
 "    for (int px = 0; px < 2; px++)\n"
 "    for (int pz = 0; pz < 2; pz++) {\n"
 "      vec2 pcv = base + vec2(float(px), float(pz)) * 7.0;\n"
@@ -742,6 +771,23 @@ static const char *CAVE_FS =
    pale value and the room came back looking like weather. A lit building is
    mostly clear air. Enough left to keep the far end from sitting at the same
    value as the near end, and no more. */
+/* The one bulb in the last room. It is a real light in the scene rather
+   than a bright patch painted on the ceiling: an inverse-square falloff
+   from a point, a visible filament, the cord it hangs from, and a warm
+   spill on the floor under it. When it goes, it goes - no fade. */
+"  if (-p.z > 527.0 && uLampOut < 0.5) {\n"
+"    vec2  lcc = centre(p.z);\n"
+"    float lst = smoothstep(244.0, 259.0, -p.z);\n"
+"    float lcy = mix(lcc.y, uHospY, lst);\n"
+"    vec3  bp  = vec3(uCorrX, lcy + 0.62, -(552.0));\n"
+"    vec3  bd  = bp - p;\n"
+"    float bl2 = dot(bd, bd);\n"
+"    vec3  bn  = bd * inversesqrt(max(bl2, 1e-4));\n"
+"    float lam = max(dot(n, bn), 0.0) * 26.0 / (1.0 + bl2);\n"
+"    col += alb * vec3(1.00, 0.90, 0.72) * lam;\n"
+"    col += vec3(1.00, 0.93, 0.78) * pow(max(dot(reflect(-bn, n), -rd), 0.0), 44.0)\n"
+"         * 6.0 / (1.0 + bl2);\n"
+"  }\n"
 "  float fog = exp(-t * (0.075 - 0.03*uLight - 0.026*uRoom));\n"
 "  col = mix(mix(vec3(0.010,0.012,0.018) + warm*0.045*uLight,\n"
 "                vec3(0.66, 0.63, 0.55), uRoom), col, fog);\n"/* The sign takes some of the haze and not all of it. Fogged like a wall it

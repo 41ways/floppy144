@@ -71,7 +71,12 @@
 #define GATE_END       480.0f
 /* Past the last gate the corridor runs on to a door. Opening it is the
  * ending; the eyelid sequence starts from the handle, not from a depth. */
-#define WAKE_Z        (GATE_END + 46.0f)
+/* The rooms stop here; from CORR_Z to WAKE_Z it is one straight corridor
+ * with the door at the far end, so the last twenty metres are a walk toward
+ * something you can see rather than one more turn. */
+#define WAKE_Z        (GATE_END + 66.0f)
+#define CORR_Z        (WAKE_Z - 20.0f)
+#define LAMP_Z        (WAKE_Z + 26.0f)   /* the room past the door */
 #define GATE_R           9.5f  /* how wide a threshold chamber opens */
 #define GATE_W           5.0f  /* and how long it runs
  */
@@ -110,6 +115,12 @@
 #define SWING_TIME     0.11f   /* and how long the step through the air takes */
 #define DASH_ON        0.22f   /* it runs in bursts, not at a constant speed */
 #define DASH_OFF       0.15f
+/* In the cave a thing gives up after this far and comes apart. In the
+ * building nothing comes apart: it follows until the light stops it or you
+ * are through the door. */
+/* In the cave a thing gives up after this far and comes apart. In the
+ * building nothing comes apart: it follows until the light stops it or you
+ * are through the door. */
 #define MON_RANGE      24.0f   /* how far it will chase before it comes apart */
 #define BURST_TIME     0.55f   /* and how long it takes to scatter */
 
@@ -129,7 +140,8 @@ static GLint  w_res, w_time, w_open, w_bright, w_sharp, w_lamp, w_lampb;
 static GLuint g_cave_prog;
 static GLint  c_res, c_cam, c_fwd, c_right, c_up, c_seed, c_wander,
               c_rough, c_time, c_light, c_wet, c_room, c_road, c_white,
-              c_pulse, c_bra, c_brb;
+              c_pulse, c_hospy, c_blink, c_corrx, c_dooru, c_lampout,
+              c_bra, c_brb;
 static GLint  u_fade, u_grey;
 static Point *g_mpts;          /* heap: 48 KB of it has no business in the exe */
 
@@ -160,6 +172,14 @@ static int   g_ev;                /* 0 calm, 1 horde closing, 2 aftermath */
 static float g_ev_t;
 static float g_guide_next;        /* the heartbeat that knows the way */
 static float g_road;
+static float g_hosp_y;      /* the one height the hospital is built at */
+static float g_corr_x;      /* the corridor, and the door, run down this line */
+static float g_door_open;   /* you opened it; it stays open */
+static float g_lamp_out;    /* the bulb, once you are far enough in */
+static float g_lamp_t;
+static float g_beat;        /* phase of the heart, 0..1 per beat */
+static float g_bpm;         /* 50 at the far end, 80 at the door */
+static float g_blink;       /* 1 on the beat, falling - the lights, and the blow */
 static int   g_quit;
 static int   g_menu_sel, g_menu_mode;
 static int   g_menu_prev;         /* the state the menu will hand back */
@@ -391,6 +411,71 @@ static float gate_bulge(float z)
     }
 }
 
+
+/* --- the backrooms ------------------------------------------------------
+ *
+ * A grid of rooms seven metres on a side. Every cell keeps two bits: whether
+ * the wall on its north side is open, and whether the wall on its west side
+ * is open. Both come from the seed, but not freely - a cell always opens at
+ * least one of them, so no cell is ever sealed off, and the north opening is
+ * biased so the way out exists without being a corridor.
+ *
+ * That gives what the reference gives: rooms that repeat, turns that end in
+ * nothing, and openings you can read at a glance because they are doorways
+ * in flat walls rather than gaps between pillars.
+ */
+#define CELL     7.0f
+#define WALL_T   0.22f
+#define DOOR_W   1.35f
+
+static int cell_open_n(int cx, int cz)     /* the wall at -z of this cell */
+{
+    float h = hash1((float)cx * 13.31f + (float)cz * 7.77f + g_seed);
+    return h < 0.62f;
+}
+
+static int cell_open_w(int cx, int cz)     /* the wall at -x of this cell */
+{
+    float h = hash1((float)cx * 5.19f - (float)cz * 11.03f + g_seed * 3.0f);
+    if (h < 0.34f) return 1;
+    if (!cell_open_n(cx, cz)) return 1;    /* never seal a cell completely */
+    return 0;
+}
+
+/* Positive in air. A wall is a slab across the cell boundary with a doorway
+ * cut out of it; the doorway sits a little off centre so the place does not
+ * read as a lattice. */
+static float rooms_air(float x, float y, float z, float floor_y)
+{
+    float slab = 1.55f - (float)fabs(y - floor_y - 1.30f);
+    float air  = slab;
+    int   cx   = (int)floorf(x / CELL);
+    int   cz   = (int)floorf(z / CELL);
+    int   i, j;
+
+    for (i = 0; i <= 1; i++) {
+        for (j = 0; j <= 1; j++) {
+            int  ax = cx + i, az = cz + j;
+            float bx = (float)ax * CELL, bz = (float)az * CELL;
+            {   /* the wall on this cell's -z side */
+                float d  = (float)fabs(z - bz) - WALL_T;
+                float o  = hash1((float)ax * 3.7f + (float)az * 9.1f + g_seed) - 0.5f;
+                float dc = bx + CELL * 0.5f + o * (CELL - DOOR_W * 2.4f);
+                if (!cell_open_n(ax, az) || (float)fabs(x - dc) > DOOR_W)
+                    if (d < air) air = d;
+            }
+            {   /* and on its -x side */
+                float d  = (float)fabs(x - bx) - WALL_T;
+                float o  = hash1((float)ax * 8.3f - (float)az * 2.9f + g_seed) - 0.5f;
+                float dc = bz + CELL * 0.5f + o * (CELL - DOOR_W * 2.4f);
+                if (!cell_open_w(ax, az) || (float)fabs(z - dc) > DOOR_W)
+                    if (d < air) air = d;
+            }
+        }
+    }
+    return air;
+}
+
 /* where the doorway sits in row ri of the hall maze */
 static float tunnel_gapx(float ri)
 {
@@ -446,61 +531,51 @@ static float cave_sdf(float x, float y, float z)
             }
         }
         if (-z > GATE_2 + 4.0f) {
-            /* The hall would not be the hall if you could walk it straight.
-             * Every seven metres a wall crosses it with one doorway in it,
-             * and stubs jut from the pillars, so the place is full of rooms
-             * that stop - but every wall has its gap, so one way always
-             * leads on. The doorways come from the row hash: the maze is the
-             * seed, like everything else. */
-            /* The hall. A ceiling you could touch, pillars on a seven-metre
-             * grid, no walls to speak of - the same room over and over in
-             * every direction, which is the whole architecture of the place
-             * you are almost out of. */
-            float slab = 1.45f - (float)fabs(y - cy + 0.3f);
-            float mx = (float)fmod(fmod(x, 7.0f) + 10.5f, 7.0f) - 3.5f;
-            float mz = (float)fmod(fmod(z, 7.0f) + 10.5f, 7.0f) - 3.5f;
-            float ax = (float)fabs(mx), az = (float)fabs(mz);
-            float pil = (ax > az ? ax : az) - 0.42f;
-            float hall = slab < pil ? slab : pil;
-            {   /* row walls, one gap apiece */
-                float rz = (float)fmod(fmod(z, 7.0f) + 10.5f, 7.0f) - 3.5f;
-                float ri = (float)floor((-z + 3.5f) / 7.0f);
-                float gx = tunnel_gapx(ri);
-                float wd = (float)fabs(rz) - 0.20f;
-                if ((float)fabs(x - gx) > 1.60f && wd < hall) hall = wd;
+            /* The building. Rooms on a grid with doorways in flat walls -
+             * see rooms_air. The tunnel's wander dies out over the first
+             * fifteen metres so the floor is one height and the walls are
+             * straight, because a hospital that undulates is a cave with
+             * paint on it. */
+            float st2  = smoothstep01(GATE_2 + 4.0f, GATE_2 + 19.0f, -z);
+            float cyh  = cy * (1.0f - st2) + g_hosp_y * st2;
+            float hall = rooms_air(x, y, z, cyh - 1.35f);
+            float dep  = -z;
+            if (dep > CORR_Z) {
+                /* the corridor: two walls, a floor, a ceiling, nothing else */
+                float fl2 = cyh - 1.35f;
+                float cw  = 1.9f - (float)fabs(x - g_corr_x);
+                float ch  = 1.55f - (float)fabs(y - fl2 - 1.30f);
+                float cor = cw < ch ? cw : ch;
+                float kk2 = smoothstep01(CORR_Z, CORR_Z + 5.0f, dep);
+                hall = hall * (1.0f - kk2) + cor * kk2;
             }
-            {   /* stubs off the pillars, one direction per cell */
-                float ci = (float)floor((x + 3.5f) / 7.0f) * 57.0f
-                         + (float)floor((-z + 3.5f) / 7.0f);
-                float hsel = hash1(ci * 3.17f + g_seed);
-                if (hsel < 0.36f) {
-                    /* a sealed lane: the wall runs pillar to pillar, across
-                     * one axis or the other depending on the cell */
-                    float w2 = (hsel < 0.18f)
-                        ? ((mz > 0.40f && mz < 3.12f) ? (float)fabs(mx) - 0.17f : 1000.0f)
-                        : ((mx > 0.40f && mx < 3.12f) ? (float)fabs(mz) - 0.17f : 1000.0f);
-                    if (w2 < hall) hall = w2;
-                }
+            if (dep > WAKE_Z + 1.2f) {
+                /* and past the door, the room with the lamp: wide, low, and
+                 * empty enough that there is nothing to measure it against */
+                float fl3 = cyh - 1.35f;
+                float rw  = 15.0f - (float)fabs(x - g_corr_x);
+                float rh  = 1.75f - (float)fabs(y - fl3 - 1.45f);
+                float re  = (LAMP_Z + 14.0f) - dep;
+                float rm  = rw < rh ? rw : rh;
+                if (re < rm) rm = re;
+                hall = rm;
             }
-            {   /* The doorway wins. A gap that happened to land on a pillar
-                 * or a stub sealed its whole row - and one sealed row seals
-                 * the rest of the game. Carve it through everything. */
-                float rz = (float)fmod(fmod(z, 7.0f) + 10.5f, 7.0f) - 3.5f;
-                float ri = (float)floor((-z + 3.5f) / 7.0f);
-                float gx = tunnel_gapx(ri);
-                float ox2 = 1.60f - (float)fabs(x - gx);
-                float oz2 = 1.60f - (float)fabs(rz);
-                float open2 = ox2 < oz2 ? ox2 : oz2;
-                if (open2 > slab) open2 = slab;
-                if (open2 > hall) hall = open2;
-            }
-            float k2 = ((-z) - (GATE_2 + 4.0f)) / 6.0f;
+            float k2   = ((-z) - (GATE_2 + 4.0f)) / 6.0f;
             if (k2 > 1.0f) k2 = 1.0f;
             main_air = main_air * (1.0f - k2) + hall * k2;
         }
-        {   /* and it ends at the door */
-            float wall = z + WAKE_Z;
+        {   /* the far side of the lamp room is the end of the world */
+            float wall = z + (LAMP_Z + 14.0f);
             if (wall < main_air) main_air = wall;
+        }
+        if (-z > WAKE_Z - 0.35f && -z < WAKE_Z + 0.35f) {
+            /* the door itself: shut until you open it */
+            float leaf = (float)fabs(-z - WAKE_Z) - 0.18f;
+            float gapx2 = 1.05f - (float)fabs(x - g_corr_x);
+            float d3 = leaf;
+            if (g_door_open > 0.5f && gapx2 > 0.0f) d3 = 1000.0f;
+            if (gapx2 < 0.0f) d3 = 1000.0f;   /* the frame is the corridor wall */
+            if (d3 < main_air) main_air = d3;
         }
         int   i0 = (int)(-z / BRANCH_SPACING);
         float b0 = branch_air(x, y, z, i0);
@@ -556,7 +631,9 @@ typedef struct {
     float timer, seed, travel;
     float foot[8][3], fa[8][3], fb[8][3], ft[8];  /* planted feet, and steps */
     float dash;  int moving, group;
-    float speed, warn, hear;   /* the archetype, as three numbers */
+    float speed, warn, hear;
+    float stun;      /* the lights just went, and it felt it */
+    /* the archetype, as three numbers */
     float scale, legspan;      /* and how big a spider it is */
 } Monster;
 
@@ -668,6 +745,14 @@ static int mon_target_count(void)
 
 static int mon_step(Monster *m, float dt, float now)
 {
+    if (m->stun > 0.0f) {
+        /* The lights just went. Whatever that is to a thing made of
+         * this place, it stops it dead for half a second - which is
+         * the half second you have to be somewhere else. */
+        m->stun -= dt;
+        m->moving = 0;
+        return 0;
+    }
     float dx, dy, dz, d;
     int killed = 0;
 
@@ -767,7 +852,7 @@ static int mon_step(Monster *m, float dt, float now)
             killed = 1;
             m->state = MON_BURST;
             m->timer = BURST_TIME;
-        } else if (m->travel > MON_RANGE || m->timer <= 0.0f) {
+        } else if ((m->travel > MON_RANGE || m->timer <= 0.0f) && g_stage < 3) {
             /* it has run itself out and simply comes apart */
             m->state = MON_BURST;
             m->timer = BURST_TIME;
@@ -1609,6 +1694,8 @@ static void mat4_view(float *m, float px, float py, float pz,
     m[3]  =  0.0f; m[7] =  0.0f; m[11] =  0.0f; m[15] =  1.0f;
 }
 
+#define PLAYER_R 0.62f
+
 /* --- attempts and lives -------------------------------------------------- */
 
 static void respawn(float now)
@@ -1624,6 +1711,29 @@ static void respawn(float now)
      * one -- so a death puts you back at the last threshold you crossed. */
     tunnel_centre(-g_check, &cx, &cy);
     g_px = cx; g_py = cy; g_pz = -g_check;
+    /* past the rooms there is only the corridor, and it does not run down
+       the old tunnel axis - starting on that axis puts you in its wall */
+    if (g_check > CORR_Z) g_px = g_corr_x;
+    {   /* The tunnel axis is a fine place to stand in a tunnel. Inside the
+         * building it is wherever the old axis happens to run, which is as
+         * often a wall as a room - and a capture at 433 m came back as one
+         * flat surface filling the screen. Look around for somewhere open. */
+        if (cave_sdf(g_px, g_py, g_pz) < PLAYER_R + 0.15f) {
+            float best = -1e9f, bx = g_px, bz = g_pz;
+            int a2, r2;
+            for (r2 = 1; r2 <= 8; r2++) {
+                for (a2 = 0; a2 < 12; a2++) {
+                    float th = (float)a2 * 0.5236f;
+                    float tx = g_px + (float)cos(th) * (float)r2 * 0.9f;
+                    float tz = g_pz + (float)sin(th) * (float)r2 * 0.9f;
+                    float d2 = cave_sdf(tx, g_py, tz);
+                    if (d2 > best) { best = d2; bx = tx; bz = tz; }
+                }
+                if (best > PLAYER_R + 0.35f) break;
+            }
+            g_px = bx; g_pz = bz;
+        }
+    }
     {   /* The tunnel bends, so a fixed heading points into the wall as often
          * as not - and in the dark that is indistinguishable from the game
          * being broken. Face the way the passage actually runs. */
@@ -1632,6 +1742,10 @@ static void respawn(float now)
         fx = ax - cx;
         fz = -3.0f;
         g_yaw = (float)atan2(fx, -fz);
+        /* The corridor runs straight and the old tunnel axis does not apply
+           to it, so facing along that axis started you walking back the way
+           you came - measured, six metres of it. */
+        if (g_check > CORR_Z) g_yaw = 0.0f;
     }
     g_pitch = 0.0f;
     g_ping_ready = now + 0.6f;
@@ -1649,6 +1763,18 @@ static void new_attempt(unsigned seed, float now)
     g_wander = 0.80f + rndf() * 0.45f;      /* 0.80 .. 1.25 */
     g_rough  = 0.70f + rndf() * 0.70f;      /* 0.70 .. 1.40 */
     build_branches();
+    {   /* Everything past the second gate is a building, and buildings
+         * do not undulate. One height is taken at the entrance and the
+         * floor holds it from there on. */
+        float hx, hy;
+        tunnel_centre(-(GATE_2 + 4.0f), &hx, &hy);
+        g_hosp_y = hy;
+        {   float qx, qy;
+            tunnel_centre(-CORR_Z, &qx, &qy);
+            g_corr_x = qx;
+        }
+    g_beat = 0.0f; g_bpm = 50.0f; g_blink = 0.0f;
+    }
     /* Both, or neither. Resetting the count without the cursor left the title's
      * own letters sitting at the front of the ring as the first thing drawn,
      * while every mark the first soundings made landed past the end of what
@@ -1978,6 +2104,11 @@ void game_init(unsigned seed, float start_depth)
     c_road   = glGetUniformLocation(g_cave_prog, "uRoad");
     c_white  = glGetUniformLocation(g_cave_prog, "uWhite");
     c_pulse  = glGetUniformLocation(g_cave_prog, "uPulse");
+    c_hospy  = glGetUniformLocation(g_cave_prog, "uHospY");
+    c_blink  = glGetUniformLocation(g_cave_prog, "uBlink");
+    c_corrx  = glGetUniformLocation(g_cave_prog, "uCorrX");
+    c_dooru  = glGetUniformLocation(g_cave_prog, "uDoor");
+    c_lampout= glGetUniformLocation(g_cave_prog, "uLampOut");
     c_bra    = glGetUniformLocation(g_cave_prog, "uBrA");
     c_brb    = glGetUniformLocation(g_cave_prog, "uBrB");
 
@@ -2043,12 +2174,26 @@ void game_init(unsigned seed, float start_depth)
  * Axis-separated so walking into a wall slides along it instead of stopping
  * dead. There is no gravity yet: this build swims. */
 
-#define PLAYER_R 0.62f
 
 /* Pushing out of the rock kept you out of it but did nothing to help you get
  * anywhere: hold a direction into a wall and you simply stopped. Take the
  * wall-parallel part of the step instead and you slide along it, which is
  * what walking down a bending tunnel in the dark actually requires. */
+/* In the building the floor is a known height rather than something to be
+ * found by falling, so the eye can simply be told where it belongs. Locking
+ * movement to the horizontal without this left the player at whatever height
+ * they entered at: in the corridor that was pressed into the ceiling, with
+ * exactly PLAYER_R of clearance and nowhere to go. */
+static float hospital_eye_y(float z)
+{
+    float cx, cy, st2, cyh, dep = -z;
+    tunnel_centre(z, &cx, &cy);
+    st2 = smoothstep01(GATE_2 + 4.0f, GATE_2 + 19.0f, dep);
+    cyh = cy * (1.0f - st2) + g_hosp_y * st2;
+    if (dep > WAKE_Z + 1.2f) return cyh + 0.10f;   /* the lamp room is taller */
+    return cyh - 0.05f;
+}
+
 static void try_move(float dx, float dy, float dz)
 {
     float n[3], d, dot;
@@ -2312,6 +2457,11 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
             glUniform1f(c_room, 1.0f);
             glUniform1f(c_road, 1.0f);
             glUniform1f(c_white, wt);
+            glUniform1f(c_hospy, g_hosp_y);
+            glUniform1f(c_blink, g_blink);
+            glUniform1f(c_corrx, g_corr_x);
+            glUniform1f(c_dooru, g_door_open);
+            glUniform1f(c_lampout, g_lamp_out);
             glUniform3fv(c_bra, 16, bra);
             glUniform3fv(c_brb, 16, brb);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -2495,6 +2645,18 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
         if (in->left)  { mx -= r[0]; my -= r[1]; mz -= r[2]; }
     }
 
+    if (!g_wet) {
+        /* Looking up used to walk you into the ceiling: the move vector was
+         * the look vector. On foot the two are different things - the eye
+         * turns, the feet stay on the floor - so the horizontal part is all
+         * that moves you. */
+        float hl = (float)sqrt(mx * mx + mz * mz);
+        if (hl > 0.0001f) {
+            float k3 = (float)sqrt(mx * mx + my * my + mz * mz) / hl;
+            mx *= k3; mz *= k3;
+        }
+        my = 0.0f;
+    }
     len = (float)sqrt(mx * mx + my * my + mz * mz);
 
     if (g_wet) {
@@ -2532,13 +2694,19 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
                 if (g_wetfeet < 0.0f) g_wetfeet = 0.0f;
             }
             g_step_acc += moved;
-            if (g_step_acc > 1.05f) {
+            if (g_step_acc > 1.55f) {
                 g_step_acc = 0.0f;
                 audio_step(g_wetfeet);
                 g_steps++;
             }
         }
         g_has_moved = 1;
+    }
+
+    if (!g_wet && -g_pz > GATE_2 + 4.0f) {
+        /* stand on the floor of whatever room this is */
+        float want = hospital_eye_y(g_pz);
+        g_py += (want - g_py) * (1.0f - (float)exp(-dt * 9.0f));
     }
 
 #ifdef DEMO_ENDING
@@ -2629,6 +2797,29 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
     if (g_stage_flash > 0.0f) g_stage_flash -= dt * 0.34f;   /* the card's length */
     g_stagef += ((float)g_stage - g_stagef) * (1.0f - (float)exp(-dt * 1.6f));
     if (g_dive > 0.0f) g_dive -= dt * 0.8f;
+    {   /* The lights are on the heart. Far from the door it is fifty a
+         * minute; at the door it is eighty, and the closer you get the more
+         * often the room goes white - which is also how often the things
+         * chasing you are knocked back. The clock is the ally. */
+        float dz2 = g_pz + WAKE_Z, dx2 = g_px;
+        float dd2 = (float)sqrt(dx2 * dx2 + dz2 * dz2);
+        float t2  = 1.0f - smoothstep01(6.0f, 90.0f, dd2);
+        g_bpm = 50.0f + 30.0f * t2;
+        g_beat += dt * (g_bpm / 60.0f);
+        if (g_beat >= 1.0f) {
+            g_beat -= 1.0f;
+            if (g_stage >= 3) {
+                int mi;
+                g_blink = 1.0f;
+                audio_beat();
+                for (mi = 0; mi < g_mon_count; mi++)
+                    if (g_mon[mi].state == MON_CHARGING || g_mon[mi].state == MON_BURST)
+                        g_mon[mi].stun = 0.55f;
+            }
+        }
+        g_blink -= dt * 5.5f;
+        if (g_blink < 0.0f) g_blink = 0.0f;
+    }
     if (g_note_t > 0.0f) g_note_t -= dt;
     g_pulse -= dt * 1.7f; if (g_pulse < 0.0f) g_pulse = 0.0f;
 
@@ -2667,16 +2858,29 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
         }
     }
 
-    /* the door at the end of the hall: an endless road behind it */
-    if (-g_pz >= WAKE_Z - 1.6f && in->ping) {
-        g_state = ST_ROAD;
-        g_road  = 0.0f;
-        audio_beep();
-        return;
+    /* The door. You have to be at it, and opening it opens it - what is
+     * behind is a room you walk into, not a cut to somewhere else. */
+    if (g_door_open < 0.5f && -g_pz >= WAKE_Z - 2.2f && in->ping) {
+        g_door_open = 1.0f;
+        audio_door();
+        g_note = "\xEB\xAC\xB8\xEC\x9D\xB4 \xEC\x97\xB4\xEB\xA0\xB8\xEB\x8B\xA4";
+        g_note_t = 2.0f;
+    }
+    /* Far enough into the room, the lamp goes out. Not a fade - out. */
+    if (-g_pz > LAMP_Z && g_lamp_out < 0.5f) {
+        g_lamp_out = 1.0f;
+        g_lamp_t   = 0.0f;
+        audio_lampout();
+    }
+    if (g_lamp_out > 0.5f) {
+        g_lamp_t += dt;
+        if (g_lamp_t > 1.15f) { g_state = ST_WAKE; g_wake = 0.32f; }
     }
 
     /* ping - not during the ambush; that moment is not yours to light */
-    if (g_ev != 1 && in->ping && now >= g_ping_ready) {
+    /* Inside the building there is light, and nothing to sound for. The
+     * ping is the cave's instrument and it is left in the cave. */
+    if (g_stage < 3 && g_ev != 1 && in->ping && now >= g_ping_ready) {
         ping_begin(now, f, r, u);
         g_ping_ready = now + PING_COOLDOWN;
     }
@@ -2760,7 +2964,11 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
          * the whole game is built on blanches to a cold ward white and comes
          * back over about three seconds, under the card. Small enough at the
          * old 0.05 that you could cross a gate and not know you had. */
-        float gf = g_stage_flash * g_stage_flash;   /* holds, then lets go */
+        /* Squared, this held near full for most of a second and then let
+         * go all at once, which on top of a wave already crossing the screen
+         * was too much moving at once. Cubed it is a swell instead: it comes
+         * up through the ping rather than over it. */
+        float gf = g_stage_flash * g_stage_flash * g_stage_flash * 0.72f;
         glClearColor(0.008f + g_flash * 0.30f + gf * 0.34f
                             + (g_dive > 0.0f ? g_dive * 0.10f : 0.0f),
                      0.012f + gf * 0.38f,
@@ -2805,18 +3013,25 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
                  * Between soundings the dark still rules until the end. */
                 float ls = smoothstep01(1.35f, 2.0f, g_shockf);
                 float dim = sm * 0.05f + smoothstep01(0.4f, 1.1f, g_shockf) * 0.10f;
+                /* The building has its own lights and they are on because it
+                 * is a building. Hanging them off the shock count meant that
+                 * starting inside the place left you in the dark for good,
+                 * with the sounding already taken away from you. */
+                float ind = smoothstep01(GATE_2 + 2.0f, GATE_2 + 22.0f, -g_pz);
                 lit = dim > ls ? dim : ls;
+                if (ind > lit) lit = ind;
                 glUniform1f(c_light, lit);
             }
             glUniform1f(c_wet, g_wet ? 1.0f : 0.0f);
             {   /* each shock hardens the rock into hospital */
-                float rd2 = smoothstep01(GATE_3 + 8.0f, GATE_END - 4.0f, -g_pz);
+                float rd2 = smoothstep01(GATE_2 + 2.0f, GATE_2 + 22.0f, -g_pz);
                 float rs  = smoothstep01(0.3f, 2.0f, g_shockf);
                 glUniform1f(c_room, rd2 > rs ? rd2 : rs);
             }
             glUniform3fv(c_bra, 16, bra);
             glUniform3fv(c_brb, 16, brb);
             glUniform1f(c_pulse, g_pulse);
+            glUniform1f(c_hospy, g_hosp_y);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
             glBindVertexArray(g_wvao_full);
             glDrawArrays(GL_TRIANGLES, 0, 3);
@@ -2915,7 +3130,9 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
         if (g_gate_t > 0.0f) g_gate_t -= dt;
     } else {   /* the readout */
         char left[40], right[40];
-        const char *hint = (g_note_t > 0.0f) ? g_note
+        const char *hint = (-g_pz >= WAKE_Z - 2.2f && -g_pz < WAKE_Z + 0.5f
+                            && g_door_open < 0.5f) ? "CLICK TO OPEN"
+                         : (g_note_t > 0.0f) ? g_note
                          : (g_ev == 2)
                          ? (g_shock >= 2 ? "\xEB\x8F\x8C\xEC\x95\x84\xEC\x99\x80, \xEC\xa1\xb0\xea\xb8\x88\xeb\xa7\x8c \xeb\x8d\x94"
                                          : "\xEC\xA0\x95\xEC\x8B\xA0 \xEC\xB0\xA8\xEB\xA0\xA4")
@@ -3107,6 +3324,7 @@ int   game_lives(void)       { return g_lives; }
 int   game_monsters(void)    { return g_mon_count; }
 int   game_stage(void)       { return g_stage; }
 int   game_quit(void)        { return g_quit; }
+void  game_set_pitch(float p){ g_pitch = p; }
 int   game_state(void)       { return g_state; }
 float game_px(void)          { return g_px; }
 float game_py(void)          { return g_py; }
@@ -3125,6 +3343,23 @@ void  game_cave(float *seed, float *wander, float *rough)
 /* how well the player fits where they are standing: PLAYER_R or more is
  * clear of the rock, less means partly inside it */
 float game_fit(void)         { return cave_sdf(g_px, g_py, g_pz); }
+
+/* Walk the corridor centre line and print the clearance. Guessing where a
+ * field closes is how an afternoon goes; measuring it takes a second. */
+void game_probe(void)
+{
+    FILE *f = fopen("probe.txt", "w");
+    float d;
+    if (!f) return;
+    fprintf(f, "corr_x %.3f  hosp_y %.3f  CORR_Z %.1f  WAKE_Z %.1f  LAMP_Z %.1f\n",
+            g_corr_x, g_hosp_y, (double)CORR_Z, (double)WAKE_Z, (double)LAMP_Z);
+    for (d = 495.0f; d <= 560.0f; d += 1.0f) {
+        float ey = hospital_eye_y(-d);
+        fprintf(f, "dep %6.1f  eye_y %7.3f  air@corr %7.3f  air@axis %7.3f\n",
+                d, ey, cave_sdf(g_corr_x, ey, -d), cave_sdf(g_corr_x + 3.0f, ey, -d));
+    }
+    fclose(f);
+}
 float game_pulse(void)       { return g_pulse; }
 float game_note_t(void)      { return g_note_t; }
 int   game_event(void)       { return g_ev; }

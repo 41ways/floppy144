@@ -35,6 +35,7 @@ static int g_width    = WIN_W;
 static int g_height   = WIN_H;
 static int g_captured = 0;     /* mouse locked to the window centre */
 static int g_ping     = 0;     /* a click arrived since the last frame */
+static float shot_pitch = 0.0f;   /* -pitch: verify ground lock */
 static int g_menu     = 0;
 static int g_enter    = 0;
 
@@ -371,6 +372,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     (void)prev; (void)show;
 
     if (cmd && strstr(cmd, "-depth")) sscanf(strstr(cmd, "-depth") + 6, "%f", &start_depth);
+    if (cmd && strstr(cmd, "-pitch")) sscanf(strstr(cmd, "-pitch") + 6, "%f", &shot_pitch);
 
     if (cmd && strstr(cmd, "-shot")) {
         g_headless = 1;
@@ -476,6 +478,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
                            : (unsigned)(start.QuadPart ^ (start.QuadPart >> 32)),
               start_depth);
 
+    if (cmd && strstr(cmd, "-probe")) { game_probe(); ExitProcess(0); }
+
     if (g_headless) {
         /* Render somewhere that is not the window. Off-screen coordinates do
          * not keep it off the screen -- the window manager brings it back on
@@ -502,6 +506,24 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     }
 
     ShowWindow(hwnd, win_back ? SW_SHOWNOACTIVATE : SW_SHOW);
+    if (!win_back) {
+        /* SW_SHOW makes a window visible; it does not put it in front of
+         * anything, and Windows refuses SetForegroundWindow to a process that
+         * does not already own the foreground. Launched over a maximised
+         * browser the game came up behind it - audible and completely
+         * invisible, which is indistinguishable from a black screen.
+         *
+         * Going topmost is not subject to that rule, so the window is raised
+         * that way and then dropped straight back to normal, which leaves it
+         * at the top of the ordinary z-order without pinning it there. */
+        SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+        SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+        SetForegroundWindow(hwnd);
+        SetActiveWindow(hwnd);
+        SetFocus(hwnd);
+    }
     if (win_back) {
         /* Neither of the polite ways works here. Opening at -32000 does not
          * keep it off the screen, because the window manager brings it back
@@ -545,6 +567,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
         in.back  = g_captured && (GetAsyncKeyState('S') & 0x8000) ? 1 : 0;
         in.left  = g_captured && (GetAsyncKeyState('A') & 0x8000) ? 1 : 0;
         in.right = g_captured && (GetAsyncKeyState('D') & 0x8000) ? 1 : 0;
+        if (shot_path[0] && shot_pitch != 0.0f) game_set_pitch(shot_pitch);
         in.ping  = g_ping;
         in.menu  = g_menu;
         in.enter = g_enter;
