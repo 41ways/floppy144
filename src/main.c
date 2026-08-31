@@ -569,12 +569,12 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
                     fprintf(lg, "frame %4d  state %d  pos %7.2f %6.2f %7.2f  "
                                 "travelled %6.2f  lives %d  shockf %4.2f  ev %d  "
                                 "pulse %4.2f  note %4.2f  steps %3d  fit %5.2f  pts %7d"
-                                "  menu %d/%d  vol %4.2f\n",
+                                "  heard %2d  menu %d/%d  vol %4.2f\n",
                             frame, game_state(), game_px(), game_py(),
                             game_pz(), game_travelled(), game_lives(),
                             game_shockf(), game_event(), game_pulse(),
                             game_note_t(), game_steps(), game_fit(),
-                            game_point_count(), game_menu_sel(),
+                            game_point_count(), game_heard(), game_menu_sel(),
                             game_menu_mode(), audio_get_volume());
                     fclose(lg);
                 }

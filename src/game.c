@@ -925,6 +925,70 @@ static float ping_reach(void)
 
 /* Did the beam actually land on it? Being behind you, or around a corner,
  * means it never knows you were there. */
+/* --- the voices ----------------------------------------------------------
+ *
+ * Sixteen side passages come off the main tunnel and until now they led
+ * nowhere. There is a voice at the end of each one, and a ping that reaches
+ * it and has line of sight to it brings back a line from outside.
+ *
+ * They are in order of depth, and they are the resuscitation: the room you
+ * are actually lying in, told by the people standing over you. The game
+ * never says what the depth counter counts. It does not have to -- at 141
+ * metres somebody says "2분 경과", at 306 "5분 넘었습니다", at 374 "6분입니다",
+ * and the number is on screen the whole time. The arithmetic is the player's.
+ *
+ * The clinical ones land where their event does: 238 m is two metres before
+ * the first defibrillator shock, so the warning arrives just ahead of it. */
+
+static const char *VOICE[BRANCHES] = {
+    "환자분, 제 목소리 들리세요?",
+    "맥박 없습니다. 압박 시작합니다",
+    "기도 확보됐습니다",
+    "에피네프린 1밀리그램 들어갑니다",
+    "2분 경과, 리듬 확인하겠습니다",
+    "보호자분은 잠깐 나가 계시겠어요",
+    "여보, 나 여기 있어. 여기 있어",
+    "제세동 200줄, 다들 물러나세요",
+    "리듬 잡혔다가 다시 빠집니다",
+    "5분 넘었습니다",
+    "한 번 더. 200줄, 물러나세요",
+    "6분 넘었습니다",
+    "아빠, 일어나 봐. 아빠",
+    "보호자분들 들어오시라고 할까요",
+    "잠깐만요. 잠깐만",
+    "맥박 있습니다. 맥박 있어요"
+};
+
+static unsigned g_heard;      /* which ones this attempt has brought back */
+static int      g_heard_n;
+
+/* Same test the monsters get -- in the beam, in range, and nothing in the
+ * way. You have to walk into the passage: the far end sits about fourteen
+ * metres in and a ping only carries fifteen to twenty-six. */
+static void voice_lit_by(const float *f, float reach)
+{
+    int i;
+    for (i = 0; i < BRANCHES; i++) {
+        float vx, vy, vz, dx, dy, dz, d, wall;
+        if (g_heard & (1u << i)) continue;
+        vx = g_br[i][0] + (g_br[i][3] - g_br[i][0]) * 0.72f;
+        vy = g_br[i][1] + (g_br[i][4] - g_br[i][1]) * 0.72f;
+        vz = g_br[i][2] + (g_br[i][5] - g_br[i][2]) * 0.72f;
+        dx = vx - g_px; dy = vy - g_py; dz = vz - g_pz;
+        d  = (float)sqrt(dx * dx + dy * dy + dz * dz);
+        if (d > reach || d < 0.001f) continue;
+        if ((dx * f[0] + dy * f[1] + dz * f[2]) / d < (float)cos(CONE_HALF_ANGLE))
+            continue;
+        if (cave_ray(g_px, g_py, g_pz, dx / d, dy / d, dz / d, d, &wall)) continue;
+
+        g_heard |= 1u << i;
+        g_heard_n++;
+        g_note   = VOICE[i];
+        g_note_t = 4.2f;      /* longer than the guide's: these are sentences */
+        return;               /* one at a time, or two passages at once talk over each other */
+    }
+}
+
 static void mon_lit_by(const float *f, float reach, float now)
 {
     int i;
@@ -978,6 +1042,7 @@ static void ping_begin(float now, const float *f, const float *r, const float *u
     g_pings++;
     audio_ping();
     mon_lit_by(f, ping_reach(), now);
+    voice_lit_by(f, ping_reach());
 }
 
 static void ping_work(void)
@@ -1319,6 +1384,8 @@ static void new_attempt(unsigned seed, float now)
     build_branches();
     g_count  = 0;
     g_pings  = 0;
+    g_heard  = 0;
+    g_heard_n = 0;
     g_lives  = START_LIVES;
     g_best_depth = 0.0f;
     g_has_moved = 0;
@@ -1972,8 +2039,11 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
         float sharp  = smoothstep01(0.46f, 0.94f, w);
         char line[48];
 
-        g_wake += dt * 0.082f;                                 /* about twelve seconds */
-        if (g_wake > 1.0f) g_wake = 1.0f;
+        /* It keeps counting past one. Every smoothstep above already clamps,
+         * so nothing moves any more -- but the overflow is a clock the last
+         * screen can be paced by, and the last screen is where the game
+         * finally says what it has been counting. */
+        g_wake += dt * 0.082f;
 
         glClearColor(0.01f, 0.012f, 0.018f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
@@ -2014,8 +2084,26 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
         }
 
         if (open > 0.82f) {
-            sprintf(line, w >= 1.0f ? "CLICK TO BEGIN AGAIN" : "BIS %d",
-                    40 + (int)(bright * 60.0f));
+            /* The one thing the game has been careful not to say. You have
+             * watched that number climb for the whole run and it was never
+             * metres -- it is how long you were gone, and every voice down
+             * there was a clock you could have checked against it. Say it
+             * once, plainly, and then say how much of it you actually heard. */
+            {   int secs = (int)(g_best_depth < 0.0f ? 0.0f : g_best_depth);
+                /* The eye is only wide enough to read through for the last
+                 * four seconds of the wake, which is not long enough for
+                 * three lines. So the vitals climb while it opens, and the
+                 * rest waits until the game has stopped moving and turns
+                 * over slowly, for as long as it takes to be read. */
+                if (w < 1.0f)
+                    sprintf(line, "BIS %d", 40 + (int)(bright * 60.0f));
+                else {
+                    int k = (int)((w - 1.0f) * 4.6f) % 3;
+                    if (k == 0)      sprintf(line, "심정지 %d분 %02d초", secs / 60, secs % 60);
+                    else if (k == 1) sprintf(line, "들은 목소리 %d / %d", g_heard_n, BRANCHES);
+                    else             sprintf(line, "CLICK TO BEGIN AGAIN");
+                }
+            }
             hud_build_wake("AWAKE", line);
             if (g_hud_n > 0) {
                 glUseProgram(g_prog);
@@ -2422,9 +2510,24 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
                                          : "\xEC\xA0\x95\xEC\x8B\xA0 \xEC\xB0\xA8\xEB\xA0\xA4")
                          : ((-g_pz >= WAKE_Z - 7.0f) ? "CLICK TO OPEN"
                          : (g_has_moved ? "" : "WASD TO MOVE"));
-        sprintf(left, g_wet ? "STAGE %d   %5.1f M  SUBMERGED"
-                            : "STAGE %d   %5.1f M", g_stage + 1,
-                -g_pz < 0.0f ? 0.0f : -g_pz);
+        {   /* Past the second shock the readout starts slipping. For about
+             * half a second at a time it shows what it has actually been
+             * counting, and then it is metres again -- often enough to be
+             * seen, rarely enough to be sure of. Nobody explains it. The
+             * number simply contradicts itself in front of you, and the
+             * voices in the side passages have been saying the same thing
+             * out loud since the two-minute mark. */
+            float dep  = -g_pz < 0.0f ? 0.0f : -g_pz;
+            int   secs = (int)dep;
+            float slip = smoothstep01(GATE_3, GATE_END, dep);
+            if (slip > 0.02f
+                && hash1((float)floor(now * 1.7f) + 11.0f) < slip * 0.17f)
+                sprintf(left, "STAGE %d   %d:%02d", g_stage + 1,
+                        secs / 60, secs % 60);
+            else
+                sprintf(left, g_wet ? "STAGE %d   %5.1f M  SUBMERGED"
+                                    : "STAGE %d   %5.1f M", g_stage + 1, dep);
+        }
         sprintf(right, "LIFE %s", g_lives >= 3 ? "* * *"
                                 : (g_lives == 2 ? "* *" : (g_lives == 1 ? "*" : "-")));
         hud_build(left, right, hint);
@@ -2586,5 +2689,6 @@ float game_pulse(void)       { return g_pulse; }
 float game_note_t(void)      { return g_note_t; }
 int   game_event(void)       { return g_ev; }
 int   game_steps(void)       { return g_steps; }
+int   game_heard(void)       { return g_heard_n; }
 int   game_menu_sel(void)    { return g_menu_sel; }
 int   game_menu_mode(void)   { return g_menu_mode; }
