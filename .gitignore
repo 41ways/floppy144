@@ -13,3 +13,6 @@ probe.txt
 
 # the proposal renders are meant to be read in the repo
 !docs/shots/*.png
+
+# generated from docs/PROPOSALS.md by tools/md2artifact.py
+proposals.html

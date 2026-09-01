@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Turn docs/PROPOSALS.md into the artifact, images and all.
 
+Writes proposals.html at the repo root, which is generated and gitignored:
+it is five megabytes of base64 and every byte of it already exists in
+docs/PROPOSALS.md and docs/shots/.
+
 Generated rather than hand-written so the page and the file cannot drift:
 the file is what gets read at home and the page is what gets read here, and
 two copies of fifty proposals maintained by hand would be one copy and one
