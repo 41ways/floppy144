@@ -463,6 +463,16 @@ static float gate_bulge(float z)
 #define CELL     7.0f
 #define WALL_T   0.22f
 #define DOOR_W   1.35f
+/* A doorway is 2.15 m to the underside of the lintel. The eye walks 1.30
+ * above the floor carrying PLAYER_R 0.62, so the top of the player sphere
+ * clears it by 23 cm. */
+#define DOOR_H 2.15f
+/* Where the cave stops being a cave. The rooms used to arrive over six
+ * metres, which is not a transition but a doorway between two worlds -- and
+ * the player kept saying so. Thirty-two metres of morph is long enough that
+ * the wall you are looking at squares up while you walk toward it. */
+#define ROOM_A (GATE_2 - 6.0f)
+#define ROOM_B (GATE_2 + 26.0f)
 
 static int cell_open_n(int cx, int cz)     /* the wall at -z of this cell */
 {
@@ -471,8 +481,13 @@ static int cell_open_n(int cx, int cz)     /* the wall at -z of this cell */
      * as the building blends over it, so you arrive at one x with no room to
      * go sideways, and if that cell's north wall happened to be shut the whole
      * hospital was behind it -- about one seed in twenty, unwinnable, and it
-     * would have looked exactly like the maze being hard. */
-    if ((float)cz * CELL > -(GATE_2 + 26.0f)) return 1;
+     * would have looked exactly like the maze being hard.
+     *
+     * It has to outlast the blend by a few rows, not end with it. While the
+     * morph is running the cave still pinches you to one x, so the row where
+     * the guarantee stops is the first row you meet with no way sideways --
+     * and putting that row exactly at ROOM_B sealed four floods in five. */
+    if ((float)cz * CELL > -(ROOM_B + 28.0f)) return 1;
     h = hash1((float)cx * 13.31f + (float)cz * 7.77f + g_seed);
     return h < 0.62f;
 }
@@ -510,14 +525,33 @@ static float rooms_air(float x, float y, float z, float floor_y)
      * A wall's doorway belongs to the cell the point is in, so the -z walls
      * take their x from cx and only cx, and vary over the two z-edges; the
      * -x walls take their z from cz and vary over the two x-edges. */
+    /* The doorway used to be punched by skipping the wall wherever the
+     * point stood in front of the opening. That is not a hole in a wall, it
+     * is a hole in the FIELD: a millimetre inside the jamb the function
+     * returns -0.22 and a millimetre outside it returns 1.55, and nothing
+     * continuous joins them. A marcher handed 1.55 steps a metre and a half
+     * into the jamb -- which is what tore the ward apart on screen, and no
+     * step size fixes it, because the error does not shrink with the step.
+     *
+     * A doorway is a piece of wall taken away, so take it away: the wall
+     * air-field is max(slab, opening), the complement of (wall AND NOT
+     * opening). Both halves are 1-Lipschitz so the max is, and it costs the
+     * same arithmetic. It also gives the opening a lintel rather than
+     * running it to the ceiling, which is what a door looks like. */
     for (k = 0; k <= 1; k++) {          /* this cell's two walls across z */
         int   az = cz + k;
         float bz = (float)az * CELL, bx = (float)cx * CELL;
         float d  = (float)fabs(z - bz) - WALL_T;
         float o  = hash1((float)cx * 3.7f + (float)az * 9.1f + g_seed) - 0.5f;
         float dc = bx + CELL * 0.5f + o * (CELL - DOOR_W * 2.4f);
-        if (!cell_open_n(cx, az) || (float)fabs(x - dc) > DOOR_W)
-            if (d < air) air = d;
+        float w  = d;
+        if (cell_open_n(cx, az)) {
+            float hw = DOOR_W - (float)fabs(x - dc);
+            float hh = (floor_y + DOOR_H) - y;
+            float hole = hw < hh ? hw : hh;
+            if (hole > w) w = hole;
+        }
+        if (w < air) air = w;
     }
     for (k = 0; k <= 1; k++) {          /* and its two across x */
         int   ax = cx + k;
@@ -525,8 +559,14 @@ static float rooms_air(float x, float y, float z, float floor_y)
         float d  = (float)fabs(x - bx) - WALL_T;
         float o  = hash1((float)ax * 8.3f - (float)cz * 2.9f + g_seed) - 0.5f;
         float dc = bz + CELL * 0.5f + o * (CELL - DOOR_W * 2.4f);
-        if (!cell_open_w(ax, cz) || (float)fabs(z - dc) > DOOR_W)
-            if (d < air) air = d;
+        float w  = d;
+        if (cell_open_w(ax, cz)) {
+            float hw = DOOR_W - (float)fabs(z - dc);
+            float hh = (floor_y + DOOR_H) - y;
+            float hole = hw < hh ? hw : hh;
+            if (hole > w) w = hole;
+        }
+        if (w < air) air = w;
     }
     return air;
 }
@@ -674,10 +714,28 @@ static float cave_sdf(float x, float y, float z)
     tunnel_centre(z, &cx, &cy);
     dx = x - cx;
     dy = (y - cy) * 1.25f;                       /* flatter than it is wide */
-    r  = (float)sqrt(dx * dx + dy * dy);
-    rad = (2.35f - 0.95f * k)
-        + 1.15f * g_rough * fbm2((float)atan2(dy, dx) * 1.6f, z * 0.42f + g_seed)
-        + gate_bulge(z);
+    {   /* The cave squares up before the building arrives.
+         *
+         * Averaging a rock tunnel with a grid of rooms does not read as one
+         * becoming the other -- it reads as melted plastic, because half of a
+         * wandering rough tube plus half of a flat wall is a draped sheet.
+         * The two fields have to be the same KIND of thing before they are
+         * mixed, so over the twenty-six metres before the rooms the cave
+         * loses its roughness and its cross-section goes from round to
+         * rectangular. By the time the rooms fade in, what they are fading
+         * into is already a corridor: straight walls, flat floor, square
+         * corners. Only the colour is still rock, and that is the last thing
+         * to change. */
+        float sq = smoothstep01(GATE_2 - 12.0f, ROOM_B - 10.0f, -z);
+        float ax = (float)fabs(dx), ay = (float)fabs(dy);
+        float ch = ax > ay ? ax : ay;             /* the square cross-section */
+        float rr = (float)sqrt(dx * dx + dy * dy);
+        r   = rr * (1.0f - sq) + ch * sq;
+        rad = (2.35f - 0.95f * k)
+            + 1.15f * g_rough * (1.0f - sq)
+              * fbm2((float)atan2(dy, dx) * 1.6f, z * 0.42f + g_seed)
+            + gate_bulge(z);
+    }
     {   /* whichever is more open here, the main passage or a branch */
         float main_air = rad - r;
         {   /* The first threshold is not a wider bit of cave. It is a room:
@@ -712,7 +770,7 @@ static float cave_sdf(float x, float y, float z)
                 }
             }
         }
-        if (-z > GATE_2 + 4.0f) {
+        if (-z > ROOM_A) {
             /* The building. Rooms on a grid with doorways in flat walls -
              * see rooms_air. The tunnel's wander dies out over the first
              * fifteen metres so the floor is one height and the walls are
@@ -724,6 +782,25 @@ static float cave_sdf(float x, float y, float z)
             {   /* the things standing in it are solid too */
                 float ob = ward_objects(x, y, z, cyh);
                 if (ob < hall) hall = ob;
+            }
+            {   /* The spine.
+                 *
+                 * A morph between a two-metre tube and a maze of seven-metre
+                 * rooms is narrower than either of them: off the axis the cave
+                 * says solid and the rooms say open, and half of each is a
+                 * wall. Four floods in five died inside the transition.
+                 *
+                 * So the building opens along the line you are already walking
+                 * -- a straight corridor on the tunnel's own axis, as wide as
+                 * the tunnel was, unioned into the rooms so it can only ever
+                 * add air. It closes over three rows past the blend, by which
+                 * point the rooms have taken the weight. The tunnel squares
+                 * up into a corridor, and then the corridor grows rooms. */
+                float kc = 1.0f - smoothstep01(ROOM_B, ROOM_B + 21.0f, -z);
+                float sw = 2.60f * kc - (float)fabs(x - cx);
+                float sh = 1.55f - (float)fabs(y - (cyh - 1.35f) - 1.30f);
+                float sp = sw < sh ? sw : sh;
+                if (sp > hall) hall = sp;
             }
             float dep  = -z;
             if (dep > CORR_Z - 3.0f) {
@@ -775,9 +852,14 @@ static float cave_sdf(float x, float y, float z)
                 if (re < rm) rm = re;
                 hall = rm;
             }
-            float k2   = ((-z) - (GATE_2 + 4.0f)) / 6.0f;
-            if (k2 > 1.0f) k2 = 1.0f;
-            main_air = main_air * (1.0f - k2) + hall * k2;
+            {   /* The same curve the shader uses, on the same argument.
+                 * They used to differ -- this one on the point, that one on
+                 * the camera -- so the picture and the collision disagreed
+                 * about where the building was: rooms you could see and not
+                 * enter, walls you walked into that were not drawn. */
+                float k2 = smoothstep01(ROOM_A, ROOM_B, -z);
+                main_air = main_air * (1.0f - k2) + hall * k2;
+            }
         }
         {   /* the far side of the lamp room is the end of the world */
             float wall = z + (LAMP_Z + 14.0f);
@@ -1669,6 +1751,8 @@ static void ping_begin(float now, const float *f, const float *r, const float *u
  * from; the cave closes up behind you instead of staying lit for ever. */
 static void pt_put(float x, float y, float z, float reveal, float gain)
 {
+    /* Nothing is written down inside the building. */
+    if (-g_pz > GATE_2 + 4.0f) return;
     g_pts[g_head].x = x;
     g_pts[g_head].y = y;
     g_pts[g_head].z = z;
@@ -3330,11 +3414,25 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
     }
     g_shockf += ((float)g_shock - g_shockf) * (1.0f - (float)exp(-dt * 0.55f));
 
-    /* after the first shock the heart paces you toward the door */
+    /* Cross into the building and the marks stay behind.
+     *
+     * A mark is a thing you found in the dark; a lit corridor is not dark, so
+     * a cloud of them hanging in front of the plaster is fog on the lens.
+     * Gating the emitters one at a time kept missing one -- the guide cone,
+     * then the defibrillator -- so the rule lives where the marks do. */
+    if (-g_pz > GATE_2 + 4.0f && (g_count > 0 || g_wcount > 0))
+        { g_count = 0; g_head = 0; g_wcount = 0; }
+
+    /* After the first shock the heart paces you toward the door. Outdoors
+     * that is a cone of marks; indoors it is the beat and the note alone.
+     * The marks were still going off inside the ward -- 240 of them every
+     * couple of seconds for the rest of the game -- which is both the ping
+     * the building was meant to have taken away and, in a lit room, a haze
+     * of white dots hanging between you and everything. */
     if (g_shock >= 1 && g_ev == 0 && now >= g_guide_next) {
         float ddx = g_px, ddz = g_pz + WAKE_Z;
         float dd  = (float)sqrt(ddx * ddx + ddz * ddz);
-        emit_guide(now);
+        if (-g_pz < GATE_2 + 4.0f) emit_guide(now);
         g_pulse = 1.0f;
         g_guide_next = now + 1.2f + dd * 0.045f;
         if (dd < 26.0f && g_note_t <= 0.0f) {

@@ -5,6 +5,7 @@
     python3 tools/mazecheck.py -s 20260904 [more seeds...]
     python3 tools/mazecheck.py -f 997.999 1.214 0.914
     python3 tools/mazecheck.py -y -0.7 [any of the above]
+    python3 tools/mazecheck.py -r 4 [any of the above]   # quarter-cell sampling
 
 The first form samples the space of caves. The second floods the cave one
 exact seed builds. The third floods a cave by the three numbers that actually
@@ -93,6 +94,12 @@ static float g_door_open;
 
 #define CELL   0.25f            /* finer than the 0.17 m walls are thick */
 #define XSPAN  48.0f            /* the tunnel wanders ~5 m, gaps reach ~8 more */
+/* The flood used to step one cell at a time, which is fine for a maze whose
+ * features are cells -- and blind to anything narrower. The transition into
+ * the building opens along a corridor 5.2 m wide on a wandering axis, and a
+ * 7 m lattice loses the thread of it between rows and calls the game sealed.
+ * STEP is the sampling pitch; the cell size is still CELL. */
+static float g_step = CELL;
 /* At the doorway, not ten metres past it. The hall used to be pillars, so any
  * row was as good a place to start as any other; the building is rooms with
  * one doorway apiece, and a grid starting inside it seeds the flood in a room
@@ -124,8 +131,8 @@ static float g_probe_y = -0.3f;   /* metres below the tunnel centre */
 static int walkable(int ix, int iz)
 {
     float cx, cy, st2, cyh;
-    float x = -XSPAN + ix * CELL;
-    float z = -(ZLO + iz * CELL);
+    float x = -XSPAN + ix * g_step;
+    float z = -(ZLO + iz * g_step);
     tunnel_centre(z, &cx, &cy);
     st2 = smoothstep01(GATE_2 + 4.0f, GATE_2 + 19.0f, -z);
     cyh = cy * (1.0f - st2) + g_hosp_y * st2;
@@ -135,7 +142,7 @@ static int walkable(int ix, int iz)
 /* The hall stops at a wall with the door in it, so the last half-metre of the
  * grid is solid on purpose. "Reached the door" therefore means what the game
  * means by it in game.c: standing close enough that a ping opens it. */
-#define DOOR_IZ ((int)((WAKE_Z - 1.6f - ZLO) / CELL))
+#define DOOR_IZ ((int)((WAKE_Z - 1.6f - ZLO) / g_step))
 
 /* Returns 1 if the door is reachable from the hall entrance. */
 static int flood(int *reached_out, int *open_out, int *deepest_out)
@@ -180,6 +187,7 @@ int main(int argc, char **argv)
     int a = 1;
     int exact, field, trials;
     if (argc > 2 && strcmp(argv[1], "-y") == 0) { g_probe_y = (float)atof(argv[2]); a = 3; }
+    if (argc > a + 1 && strcmp(argv[a], "-r") == 0) { g_step = CELL / (float)atoi(argv[a+1]); a += 2; }
     exact = argc > a && strcmp(argv[a], "-s") == 0;
     field = argc > a + 3 && strcmp(argv[a], "-f") == 0;
     trials = field ? 1 : exact ? argc - a - 1 : (argc > a ? atoi(argv[a]) : 40);
@@ -187,15 +195,15 @@ int main(int argc, char **argv)
     double worst_iso = 0.0;
     int worst_seed = -1;
 
-    NX = (int)(2.0f * XSPAN / CELL) + 1;
-    NZ = (int)((ZHI - ZLO) / CELL) + 1;
+    NX = (int)(2.0f * XSPAN / g_step) + 1;
+    NZ = (int)((ZHI - ZLO) / g_step) + 1;
     pass  = malloc((size_t)NX * NZ);
     queue = malloc(sizeof(int) * (size_t)NX * NZ);
     if (!pass || !queue) { fprintf(stderr, "out of memory\n"); return 2; }
 
     printf("grid %%d x %%d at %%.2f m, hall z -%%.0f .. -%%.0f, clearance %%.2f m,"
            " probing %%.2f m below centre\n",
-           NX, NZ, CELL, (double)ZLO, (double)ZHI, (double)PLAYER_R, (double)g_probe_y);
+           NX, NZ, g_step, (double)ZLO, (double)ZHI, (double)PLAYER_R, (double)g_probe_y);
 
     for (t = 0; t < trials; t++) {
         static const float shocks[2] = {0.0f, 2.0f};

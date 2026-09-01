@@ -640,12 +640,21 @@ static const char *CAVE_FS =
    second design. */
 "bool openN(float cx, float cz){\n"
 /* the first rows always let you in -- see cell_open_n in game.c */
-"  if (cz * 7.0 > -266.0) return true;\n"
+"  if (cz * 7.0 > -294.0) return true;\n"
 "  return h1(cx * 13.31 + cz * 7.77 + uSeed) < 0.62; }\n"
 "bool openW(float cx, float cz){\n"
 "  float h = h1(cx * 5.19 - cz * 11.03 + uSeed * 3.0);\n"
 "  if (h < 0.34) return true;\n"
 "  return !openN(cx, cz); }\n"
+/* How much of the building there is at this depth. It used to be a
+   uniform computed from the camera while cave_sdf computed it from the
+   point, so the picture and the collision disagreed about where the
+   building was. Now both are this, of the point -- which is also what
+   stops it reading like a portal: the wall ahead of you squares up as
+   you walk toward it instead of the world changing under your feet.
+   The uniform keeps only the defibrillator share. */
+"float roomAt(float z){\n"
+"  return clamp(smoothstep(234.0, 266.0, -z), 0.0, 1.0); }\n"
 "float roomsAir(vec3 p, float floorY){\n"
 "  float air = 1.55 - abs(p.y - floorY - 1.30);\n"
 /* A doorway belongs to the cell the point is in, so the -z walls take their
@@ -660,7 +669,8 @@ static const char *CAVE_FS =
 "    float d1 = abs(p.z - bz) - 0.22;\n"
 "    float o1 = h1(cx * 3.7 + az * 9.1 + uSeed) - 0.5;\n"
 "    float c1 = bx + 3.5 + o1 * (7.0 - 1.35 * 2.4);\n"
-"    if (!openN(cx, az) || abs(p.x - c1) > 1.35) air = min(air, d1);\n"
+"    float hn = min(1.35 - abs(p.x - c1), (floorY + 2.15) - p.y);\n"
+"    air = min(air, openN(cx, az) ? max(d1, hn) : d1);\n"
 "  }\n"
 "  for (int k = 0; k <= 1; k++) {\n"
 "    float ax = cx + float(k);\n"
@@ -668,7 +678,8 @@ static const char *CAVE_FS =
 "    float d2 = abs(p.x - bx) - 0.22;\n"
 "    float o2 = h1(ax * 8.3 - cz * 2.9 + uSeed) - 0.5;\n"
 "    float c2 = bz + 3.5 + o2 * (7.0 - 1.35 * 2.4);\n"
-"    if (!openW(ax, cz) || abs(p.z - c2) > 1.35) air = min(air, d2);\n"
+"    float hw = min(1.35 - abs(p.z - c2), (floorY + 2.15) - p.y);\n"
+"    air = min(air, openW(ax, cz) ? max(d2, hw) : d2);\n"
 "  }\n"
 "  return air; }\n"
 /* One of the things, as a distance. A low body slung between eight legs,
@@ -770,10 +781,16 @@ static const char *CAVE_FS =
 "float field(vec3 p){\n"
 "  vec2 c = centre(p.z);\n"
 "  vec2 d2 = vec2(p.x - c.x, (p.y - c.y) * 1.25);\n"
+/* Mirrored from cave_sdf: the cross-section goes round to rectangular
+   and the rock loses its roughness before the rooms arrive, so that
+   what the building fades into is already a corridor rather than a
+   tube. Blending a tube with a room draws a draped sheet. */
+"  float sqc = smoothstep(228.0, 256.0, -p.z);\n"
 "  float rad = (2.35 - 0.95*dk(p.z))\n"
-"            + 1.15*uRough*fbm2(atan(d2.y, d2.x)*1.6, p.z*0.42 + uSeed)\n"
+"            + 1.15*uRough*(1.0 - sqc)\n"
+"              *fbm2(atan(d2.y, d2.x)*1.6, p.z*0.42 + uSeed)\n"
 "            + gate(p.z);\n"
-"  float m = rad - length(d2);\n"
+"  float m = rad - mix(length(d2), max(abs(d2.x), abs(d2.y)), sqc);\n"
 /* The first threshold, mirrored from cave_sdf: flat floor, flat walls, flat
    ceiling, and a rectangular pool cut into the middle of it. Blended in over
    seven metres at each end so the passage runs into the doorways. */
@@ -792,6 +809,13 @@ static const char *CAVE_FS =
 "  float st2  = smoothstep(244.0, 259.0, -p.z);\n"
 "  float cyh  = mix(c.y, uHospY, st2);\n"
 "  float boxm = roomsAir(p, cyh - 1.35);\n"
+/* The spine, mirrored from cave_sdf: a straight corridor on the tunnel
+   axis, as wide as the tunnel was, closing over three rows once the
+   rooms have taken the weight. Without it the morph between a tube and
+   a maze is narrower than either and the transition seals. */
+"  float kc = 1.0 - smoothstep(266.0, 287.0, -p.z);\n"
+"  boxm = max(boxm, min(2.60 * kc - abs(p.x - c.x),\n"
+"                       1.55 - abs(p.y - (cyh - 1.35) - 1.30)));\n"
 /* ---- 시안: 지오메트리를 바꾸는 것들 -------------------------------------
    셰이더 필드에만 들어 있다. 채택하면 cave_sdf에도 넣고 mazecheck를 다시
    돌려야 한다 -- 천장을 내리고 벽을 세우는 것은 통과 가능성을 바꾼다. */
@@ -828,7 +852,7 @@ static const char *CAVE_FS =
 "    boxm = min(min(15.0 - abs(p.x - uCorrX),\n"
 "                   1.75 - abs(p.y - fl3 - 1.45)), (uWakeZ + 40.0) - dep);\n"
 "  }\n"
-"  m = mix(m, boxm, uRoom);\n"
+"  m = mix(m, boxm, roomAt(p.z));\n"
 /* ---- 2차 시안: 바닥에 서는 것들 -----------------------------------------
    Visual only -- these live in the shader field and not in cave_sdf, so you
    walk through them. That is the right trade for a proposal: it costs one
@@ -1060,34 +1084,33 @@ static const char *CAVE_FS =
 "  vec3 rd = normalize(uRight*uv.x + uUp*uv.y + uFwd*1.35);\n"
 "  float t = 0.05;\n"
 "  bool hit = false;\n"
-/* Over-relaxed sphere tracing.
+/* Plain sphere tracing.
 
-   The field lies: the row walls carve their doorways with a hard
-   conditional and rooms union with a max, so both hand back a distance
-   larger than the true one. Marching a fixed fraction of it walks into
-   walls, and on a wall seen edge-on that reads as the wall bulging toward
-   you - the back half of the game looked like it was melting. Capping the
-   step hid part of it and cost more: the setting that actually flattened
-   the wall ran at 82 ms a frame against 34.
+   It was over-relaxed for a while, to buy back the cost of a step small
+   enough to hide the walls bulging. That was treating a symptom. The
+   walls bulged because roomsAir punched its doorways with a conditional,
+   which left the field discontinuous at every jamb in the building, and
+   no relaxation scheme survives that: Keinert's overshoot test assumes
+   the field is a lower bound on the distance, and across a discontinuity
+   the error is unbounded. At grazing angles it shredded whole walls into
+   fans.
 
-   So rather than trust the distance less, take a bolder step and check it.
-   If the sphere at the new point does not reach back to the old one, the
-   step jumped a surface; undo it and retry unrelaxed. Overshoot is caught
-   instead of avoided, so the ray keeps its reach across open floor and
-   still cannot pass through a wall. (Keinert et al., Enhanced Sphere
-   Tracing.) The variable is not called step because GLSL already has one.
-*/
-"  float om = 1.20, prev = 1e9, adv = 0.0;\n"
-"  for (int i = 0; i < 200; i++){\n"
-"    float d = worldD(uCam + rd*t);\n"
-"    bool over = (om > 1.0) && (d + prev) < adv;\n"
-"    if (over) { adv -= om * adv; om = 1.0; }\n"
-"    else {\n"
-"      if (d < 0.006) { hit = true; break; }\n"
-"      adv  = d * om;\n"
-"      prev = d;\n"
-"    }\n"
-"    t += adv;\n"
+   With the doorways subtracted properly the field is 1-Lipschitz again
+   and the ordinary march is both correct and fast. The hit threshold
+   opens with distance because one pixel covers more world the further it
+   goes; a fixed threshold spends iterations far away that buy nothing. */
+"  for (int i = 0; i < 168; i++){\n"
+"    vec3  q = uCam + rd*t;\n"
+"    float d = worldD(q);\n"
+"    if (d < 0.0025 + 0.0016*t) { hit = true; break; }\n"
+/* Where the cave is turning into the building the field is a blend of
+   two of them, and a blend whose weight moves through space is not
+   1-Lipschitz: the term (ward - cave) * dk/dz adds up to half a metre
+   per metre. So in the band, and only there, tread more carefully.
+   Scaling the step does not move a single surface -- the zero set is
+   untouched, and cave_sdf keeps its true magnitude for collision. */
+"    float kb = roomAt(q.z);\n"
+"    t += max(d * (0.88 - 1.15 * kb * (1.0 - kb)), 0.006);\n"
 "    if (t > 32.0) break; }\n"
 /* In the dark, distance is black and that is the whole point - the cave is
    only what the sounding gave back. But once the corridor takes over, the
@@ -1132,10 +1155,12 @@ static const char *CAVE_FS =
 /* Colder, and a little green. Warm beige is a house; a corridor nobody has
    walked down in two weeks is lit by tubes, and tubes are not warm. This is
    most of what separates "a room" from "somewhere you should not still be". */
-"    vec3 rmat = vec3(0.760, 0.775, 0.735);\n"                 /* wall paint */
+"    vec3 rmat = vec3(0.782, 0.786, 0.780);\n"                 /* wall paint */
 "    rmat = mix(rmat, vec3(0.372, 0.400, 0.378), m_flr);\n"   /* vinyl */
 "    rmat = mix(rmat, vec3(0.880, 0.900, 0.870), m_cei);\n"   /* ceiling tile */
-"    alb = mix(alb, rmat, uRoom * 0.9);\n"
+/* All of it, not nine tenths: the last tenth was the cave rock, and it
+   was enough to turn every white surface in the hospital olive. */
+"    alb = mix(alb, rmat, uRoom);\n"
 "  }\n"
 /* The sign over the door -- the one saturated thing in the game. Down here
    every surface is the same pale beige and there is nothing to walk toward;
@@ -1641,7 +1666,10 @@ static const char *CAVE_FS =
    no dark in any corner, which is the look of a render and not of a room. */
 "  vec3 col  = alb * hemi * uLight * (0.16 + 0.20*uRoom) * ao;\n"
 /* and a floor bounce, so ceilings are not painted-on black */
-"  col += alb * warm * clamp(-n.y, 0.0, 1.0) * uLight * 0.10;\n"
+/* and a floor bounce, so ceilings are not painted-on black. The fittings
+   point down, so without this the ceiling they hang in is the darkest
+   thing in a lit room, which no ceiling has ever been. */
+"  col += alb * warm * clamp(-n.y, 0.0, 1.0) * uLight * (0.10 + 0.30*uRoom);\n"
 "  col += alb * warm * dif * mix(sh, 1.0, 0.22) * (0.18 + 0.55*uLight);\n"
 "  col += warm * fre * (0.02 + 0.14*uLight) * ao;\n"
 "  col += warm * pow(max(dot(reflect(-ld, n), -rd), 0.0), 34.0) * uWet * 0.65 * sh;\n"
@@ -1807,7 +1835,7 @@ static const char *CAVE_FS =
 "  }\n""  col = mix(col, col * vec3(1.24, 1.06, 0.88) + vec3(0.09, 0.045, 0.008),\n"
 "            uHand * 0.55);\n"
 "  col = mix(mix(vec3(0.010,0.012,0.018) + warm*0.045*uLight,\n"
-"                vec3(0.66, 0.63, 0.55), uRoom), col, fog);\n"/* The sign takes some of the haze and not all of it. Fogged like a wall it
+"                vec3(0.45, 0.45, 0.43), uRoom), col, fog);\n"/* The sign takes some of the haze and not all of it. Fogged like a wall it
    came out the same mint as everything else, and a sign that has gone the
    colour of the corridor is not a sign -- it is meant to be the one thing
    down here you can pick out from the far end. */
@@ -1843,6 +1871,20 @@ static const char *CAVE_FS =
 "    col += vec3(0.40, 0.08, 0.06) * rim * 0.22;   // wet edge\n"
 "    col += vec3(0.9, 0.95, 1.0) * beastStun * 0.50;\n"
 "  }\n"
+/* Exposure, before the curve rather than after it.
+   Measured across the ward, the whole picture was living between 100
+   and 180 of 255 -- no black anywhere, no white anywhere, a spread of
+   about forty levels. That is what hurts to look at: the eye is given
+   nothing to fix on and grinds at the difference between two greys.
+
+   The S-curve that was supposed to fix it could not, and the reason is
+   arithmetic: it inflects at 0.5 and every value in the room was
+   already above 0.5, so it pushed the whole image UP and widened
+   nothing. Stopping down first puts the mid-tones back on the middle
+   of the curve, and then the contrast has somewhere to go -- the
+   fittings keep the top end, and the floor under a trolley finally
+   gets a bottom one. */
+"  col *= mix(1.0, 0.70, uRoom);\n"
 "  col = col / (col + vec3(0.9));\n"
 "  col = pow(max(col, vec3(0.0)), vec3(0.4545));\n"
 /* And the last of the flatness was the tone curve, not the lighting.
@@ -1852,7 +1894,9 @@ static const char *CAVE_FS =
    the eye. An S over the top of it gives the corridor its blacks and its
    highlights back. Corridor only: the cave is dark on purpose, and a curve
    like this would take what little it has. */
-"  col = mix(col, col*col*(3.0 - 2.0*col), 0.45 * uRoom);\n"
+"  col = mix(col, col*col*(3.0 - 2.0*col), 0.80 * uRoom);\n"
+/* and a black point, so the darkest thing in the room is actually dark */
+"  col = clamp((col - 0.055*uRoom) / (1.0 - 0.055*uRoom), 0.0, 1.0);\n"
 /* No air. The picture closes from the edges and what is left of it goes grey
    -- the same thing that happens to a person about to faint, which is what
    this is. Nothing about it is subtle on purpose. */
