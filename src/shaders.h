@@ -576,8 +576,50 @@ static const char *CAVE_FS =
 /* One stretch of the building, with soft ends. The whole point of a zone is
    that you cross into it: a treatment applied to all three hundred metres is
    not a zone, it is the building, and then nothing has changed. */
+/* ---- 4단계 배치 ----------------------------------------------------------
+ *
+ * 익숙한 게 대부분이고 기괴한 것이 거기서 튀어나와야 무섭다. 기괴하기만 하면
+ * 그냥 기괴한 건물이고, 두 번째 방부터는 아무것도 아니다. 그래서 302 m 가운데
+ * 절반 넘게는 평범한 병동이고, 가구는 넓게 깔려 병원답게 만들고, 어긋남은
+ * 드물게 한 번씩만 나온다.
+ *
+ * 사고 흔적은 특히 아껴 쓴다. 두 군데뿐이다 -- 한 번은 스키드 마크로 흘리고,
+ * 한 번은 벽에서 전조등이 나온다. 차 사고로 여기 온 사람이니 이 건물이 그걸
+ * 기억하고 있는 것이고, 기억은 자주 나지 않아야 기억이다.
+ */
 "float zone(float dep, float a, float b){\n"
 "  return smoothstep(a - 5.0, a, dep) * (1.0 - smoothstep(b, b + 5.0, dep)); }\n"
+/* 어디에 무엇이 있는지. -proto N 은 이 배치를 무시하고 하나만 켠다. */
+"float lay(int n, float dep){\n"
+"  if (uProto == n) return 1.0;\n"
+"  if (uProto != 0) return 0.0;\n"
+/* 가구 -- 넓게, 병원답게 */
+"  if (n == 12) return zone(dep, 268.0, 286.0);\n"        /* O-1 의자 */
+"  if (n == 21) return zone(dep, 356.0, 364.0);\n"        /* O-6 처치 카트 */
+"  if (n == 22) return zone(dep, 306.0, 312.0);\n"        /* O-7 린넨 카트 */
+"  if (n == 23) return zone(dep, 452.0, 458.0);\n"        /* O-8 청소 카트 */
+"  if (n == 25) return max(zone(dep, 296.0, 302.0),\n"    /* O-5 휠체어 */
+"                         zone(dep, 424.0, 430.0));\n"
+"  if (n == 26) return max(zone(dep, 258.0, 266.0),\n"    /* O-12 게시판 */
+"                         zone(dep, 388.0, 396.0));\n"
+"  if (n == 28) return zone(dep, 466.0, 472.0);\n"        /* O-16 폐기물통 */
+"  if (n == 29) return zone(dep, 360.0, 368.0);\n"        /* O-17 정수기 */
+"  if (n == 10) return 1.0;\n"                            /* O-11 명패 -- 길찾기 */
+"  if (n == 11) return 1.0;\n"                            /* O-9/10/14 벽 설비 */
+/* 병동 -- 각각 한 구역 */
+"  if (n == 46) return zone(dep, 368.0, 382.0);\n"        /* W-8 외래 대기 */
+"  if (n == 16) return zone(dep, 446.0, 460.0);\n"        /* W-4 수술부 */
+"  if (n == 17) return zone(dep, 488.0, 500.0);\n"        /* W-5 영안실 */
+/* 어긋남 -- 드물게 */
+"  if (n == 34) return zone(dep, 320.0, 334.0);\n"        /* SC-4 문 없는 복도 */
+"  if (n == 33) return zone(dep, 414.0, 424.0);\n"        /* SC-2 내려앉은 천장 */
+"  if (n == 36) return zone(dep, 502.0, 508.0);\n"        /* PL-4 벽이 된 복도 */
+"  if (n == 39) return zone(dep, 480.0, 486.0);\n"        /* CT-4 여덟 EXIT */
+"  if (n == 42) return 1.0;\n"                            /* LT-1 -- 등 하나뿐 */
+/* 사고 -- 두 군데 */
+"  if (n == 50) return zone(dep, 390.0, 400.0);\n"        /* 스키드 마크 */
+"  if (n == 51) return zone(dep, 436.0, 446.0);\n"        /* 전조등·가드레일·도로 */
+"  return 0.0; }\n"
 /* boxes and posts, for the furniture proposals */
 "float bx(vec3 p, vec3 b){ vec3 q = abs(p) - b;\n"
 "  return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0); }\n"
@@ -748,19 +790,19 @@ static const char *CAVE_FS =
 /* ---- 시안: 지오메트리를 바꾸는 것들 -------------------------------------
    셰이더 필드에만 들어 있다. 채택하면 cave_sdf에도 넣고 mazecheck를 다시
    돌려야 한다 -- 천장을 내리고 벽을 세우는 것은 통과 가능성을 바꾼다. */
-"  if (uProto == 33) {\n"
+"  if (lay(33, -p.z) > 0.02) {\n"
 /* SC-2 내려앉은 천장 — 한 구역만 1.55 m에서 0.80 m로 */
 "    float zb = zone(-p.z, 524.0, 538.0);\n"
 "    float low = 0.80 - abs(p.y - (cyh - 1.35) - 0.62);\n"
 "    boxm = min(boxm, mix(9.0, low, zb));\n"
 "  }\n"
-"  if (uProto == 34) {\n"
+"  if (lay(34, -p.z) > 0.02) {\n"
 /* SC-4 끝이 안 보이는 복도 — 가로벽도 문도 없는 한 줄 */
 "    float zb = zone(-p.z, 518.0, 548.0);\n"
 "    float hall = min(2.6 - abs(p.x - uCorrX), 1.55 - abs(p.y - (cyh - 1.35) - 1.30));\n"
 "    boxm = mix(boxm, hall, zb);\n"
 "  }\n"
-"  if (uProto == 36) {\n"
+"  if (lay(36, -p.z) > 0.02) {\n"
 /* PL-4 벽이 된 복도 — 다 갖춘 복도가 아무 표시 없이 끝난다 */
 "    if (-p.z > 536.0 && -p.z < 536.5) boxm = min(boxm, abs(-p.z - 536.25) - 0.25);\n"
 "  }\n"
@@ -825,7 +867,7 @@ static const char *CAVE_FS =
 "    bar = min(bar, pst(qp - vec3(uCorrX - 0.46, fy + 0.46, 0.0), 0.030, 0.46));\n"
 "    m = min(m, min(mat, bar));\n"
 "  }\n"
-"  if (uProto == 46) {\n"
+"  if (lay(46, -p.z) > 0.02) {\n"
 /* W-8 외래 대기 — 의자 줄과 접수 카운터 */
 "    float fy = cyh - 1.60;\n"
 "    vec3  q  = p; q.z = mod(p.z + 0.32, 0.64) - 0.32;\n"
@@ -837,11 +879,12 @@ static const char *CAVE_FS =
 "    cnt = min(cnt, bx(p - vec3(uCorrX + 1.10, fy + 1.14, -534.0), vec3(0.62, 0.05, 1.7)));\n"
 "    m = min(m, min(ch, cnt));\n"
 "  }\n"
-"  if (uProto >= 21 && uProto <= 31) {\n"
+"  if (lay(21,-p.z) + lay(22,-p.z) + lay(23,-p.z) + lay(25,-p.z)\n"
+"    + lay(28,-p.z) + lay(29,-p.z) > 0.02) {\n"
 "    float fy = cyh - 1.60;\n"
 "    vec3  q  = p; q.z = mod(p.z + 3.5, 7.0) - 3.5;\n"
 "    float o  = 1e9;\n"
-"    if (uProto == 21) {\n"
+"    if (lay(21, -p.z) > 0.02) {\n"
 /* O-6 처치 카트 — 서랍 한 칸이 열려 있다 */
 "      vec3 c = vec3(uCorrX - 1.30, fy + 0.46, 0.0);\n"
 "      o = bx(q - c, vec3(0.24, 0.36, 0.19));\n"
@@ -849,13 +892,13 @@ static const char *CAVE_FS =
 "      o = min(o, bx(q - c - vec3(0.0, 0.06, 0.26), vec3(0.22, 0.075, 0.09)));\n"
 "      o = min(o, pst(q - c - vec3(0.19, -0.42, 0.14), 0.035, 0.035));\n"
 "      o = min(o, pst(q - c - vec3(-0.19, -0.42, 0.14), 0.035, 0.035));\n"
-"    } else if (uProto == 22) {\n"
+"    } else if (lay(22,-p.z) > 0.02) {\n"
 /* O-7 린넨 카트 — 수건이 쌓여 넘친다 */
 "      vec3 c = vec3(uCorrX - 1.32, fy + 0.40, 0.0);\n"
 "      o = bx(q - c, vec3(0.30, 0.30, 0.22));\n"
 "      o = min(o, bx(q - c - vec3(0.0, 0.34, 0.0), vec3(0.28, 0.10, 0.20)));\n"
 "      o = min(o, bx(q - c - vec3(0.06, 0.44, 0.03), vec3(0.20, 0.06, 0.15)));\n"
-"    } else if (uProto == 23) {\n"
+"    } else if (lay(23,-p.z) > 0.02) {\n"
 /* O-8 청소 카트와 미끄럼 주의 표지판 */
 "      vec3 c = vec3(uCorrX - 1.25, fy + 0.30, 0.0);\n"
 "      o = pst(q - c, 0.16, 0.24);\n"
@@ -873,7 +916,7 @@ static const char *CAVE_FS =
 "                     0.055, 0.020));\n"
 "      o = min(o, pst(vec3(q.y, q.x, q.z) - vec3(fy + 0.06, uCorrX - 1.34, -0.28),\n"
 "                     0.055, 0.020));\n"
-"    } else if (uProto == 25) {\n"
+"    } else if (lay(25,-p.z) > 0.02) {\n"
 /* O-5 휠체어 — 복도를 향해 돌려진 채 */
 "      vec3 c = vec3(uCorrX - 0.85, fy + 0.48, 0.0);\n"
 "      o = bx(q - c, vec3(0.23, 0.032, 0.22));\n"
@@ -885,25 +928,25 @@ static const char *CAVE_FS =
 "                     0.26, 0.022));\n"
 "      o = min(o, pst(q - c - vec3(-0.22, 0.62, 0.24), 0.020, 0.26));\n"
 "      o = min(o, pst(q - c - vec3(-0.22, 0.62, -0.24), 0.020, 0.26));\n"
-"    } else if (uProto == 28) {\n"
+"    } else if (lay(28,-p.z) > 0.02) {\n"
 /* O-16 의료폐기물 통 — 노란 통, 가득 */
 "      vec3 c = vec3(uCorrX - 1.44, fy + 0.34, 0.0);\n"
 "      o = pst(q - c, 0.20, 0.34);\n"
 "      o = min(o, pst(q - c - vec3(0.0, 0.37, 0.0), 0.21, 0.028));\n"
-"    } else if (uProto == 29) {\n"
+"    } else if (lay(29,-p.z) > 0.02) {\n"
 /* O-17 정수기 — 복도 끝의 미끼 */
 "      vec3 c = vec3(uCorrX - 1.40, fy + 0.55, 0.0);\n"
 "      o = bx(q - c, vec3(0.16, 0.55, 0.19));\n"
 "      o = min(o, pst(q - c - vec3(0.0, 0.78, 0.0), 0.145, 0.24));\n"
 "      o = min(o, bx(q - c - vec3(0.17, 0.10, 0.0), vec3(0.045, 0.05, 0.05)));\n"
-"    } else if (uProto == 30) {\n"
+"    } else if (lay(30,-p.z) > 0.02) {\n"
 /* O-18 보호자 간이침대 — 담요가 개어져 있고 그 위에 책이 엎어져 */
 "      vec3 c = vec3(uCorrX - 1.05, fy + 0.24, 0.0);\n"
 "      o = bx(q - c, vec3(0.34, 0.075, 0.92));\n"
 "      o = min(o, bx(q - c - vec3(0.0, -0.14, 0.0), vec3(0.28, 0.13, 0.84)));\n"
 "      o = min(o, bx(q - c - vec3(0.0, 0.13, 0.34), vec3(0.30, 0.075, 0.26)));\n"
 "      o = min(o, bx(q - c - vec3(0.04, 0.22, 0.30), vec3(0.11, 0.014, 0.08)));\n"
-"    } else if (uProto == 31) {\n"
+"    } else if (lay(31,-p.z) > 0.02) {\n"
 /* O-19 이동형 X선 — 복도를 좁힌다 */
 "      vec3 c = vec3(uCorrX - 0.75, fy + 0.55, 0.0);\n"
 "      o = bx(q - c, vec3(0.30, 0.55, 0.28));\n"
@@ -913,7 +956,7 @@ static const char *CAVE_FS =
 "    }\n"
 "    m = min(m, o);\n"
 "  }\n"
-"  if (uProto == 12) {\n"
+"  if (lay(12, -p.z) > 0.02) {\n"
 /* O-1 연결 대기 의자 — a three-seat run against the wall, repeated so it goes
    the length of the corridor: the CT-3 version of the same object. */
 "    float fy = cyh - 1.60;\n"
@@ -1249,7 +1292,7 @@ static const char *CAVE_FS =
    All albedo, all read off the wall's own coordinates, all behind uProto.
    dz2 is distance to the nearest door centre along the wall, so anything
    placed against it sits beside a door the way real fittings do. */
-"    if (uProto == 10) {\n"
+"    if (lay(10, -p.z) > 0.02) {\n"
 /* O-11 병실 명패 — a plate beside every door, room number on it, name slot
    blank. The only proposal that improves wayfinding while it unsettles. */
 "      float pe = max(abs(dz2 - 1.42) / 0.30, abs(wy - 0.34) / 0.115);\n"
@@ -1260,7 +1303,7 @@ static const char *CAVE_FS =
 "      alb = mix(alb, alb * 0.22,\n"
 "                smoothstep(1.0, 0.88, num) * step(0.45, fract(dz2 * 26.0)));\n"
 "    }\n"
-"    if (uProto == 11) {\n"
+"    if (lay(11, -p.z) > 0.02) {\n"
 /* O-9 손소독제 · O-10 소화기함 · O-14 산소 배관구, all at once so the
    corridor gets its rhythm back */
 "      float dsp = max(abs(dz2 - 1.72) / 0.085, abs(wy - 0.10) / 0.145);\n"
@@ -1298,12 +1341,67 @@ static const char *CAVE_FS =
 "               * smoothstep(2.10, 1.30, dz2) * smoothstep(0.60, 1.05, dz2);\n"
 "      alb = mix(alb, alb * 0.30, upr * mk * near);\n"
 "    }\n"
-"    if (uProto == 39) {\n"
-/* CT-4 여덟 개의 EXIT — 전부 다른 방향 */
-"      float ee = max(abs(dz2 - 1.60) / 0.30, abs(wy - 0.86) / 0.105);\n"
-"      float fig = step(0.50, fract(dz2 * 13.0)) * step(0.35, fract(wy * 22.0));\n"
-"      alb = mix(alb, mix(vec3(0.03, 2.30, 0.18), vec3(2.2, 2.4, 2.2), fig),\n"
-"                smoothstep(1.00, 0.88, ee));\n"
+/* ---- 사고 -------------------------------------------------------------
+ * 차에 치여 여기 온 사람이고, 이 건물은 그걸 기억하고 있다. 두 군데뿐이다.
+ * 한 번은 바닥에 흘리고, 한 번은 벽에서 나온다. 기억은 자주 나면 기억이 아니다.
+ */
+"    if (lay(50, -p.z) > 0.02) {\n"
+/* 스키드 마크 -- 병원 장판 위에 휘어진 두 줄. 먼저 이것만 보여주고,\n"
+   무엇이었는지는 나중에 말한다. */
+"      float k = lay(50, -p.z);\n"
+"      float u = (-p.z - 395.0) * 0.16;\n"
+"      float bend = u * u * 1.30 - 0.20;\n"
+"      float d1 = abs(p.x - uCorrX - bend + 0.34);\n"
+"      float d2 = abs(p.x - uCorrX - bend - 0.34);\n"
+"      float sk = smoothstep(0.085, 0.030, min(d1, d2));\n"
+"      sk *= 0.55 + 0.45 * grain(p * 3.4);\n"
+"      alb = mix(alb, vec3(0.055, 0.050, 0.048), m_flr * sk * k * 0.92);\n"
+"    }\n"
+"    if (lay(51, -p.z) > 0.02) {\n"
+/* 도로가 된 바닥, 벽에 박힌 가드레일, 그리고 벽에서 나오는 전조등 두 개. */
+"      float k = lay(51, -p.z);\n"
+/* 바닥이 아스팔트로 -- 가운데 흰 차선까지 */
+"      float lane = smoothstep(0.075, 0.030, abs(p.x - uCorrX))\n"
+"                 * step(0.45, fract(-p.z * 0.30));\n"
+"      vec3 road = mix(vec3(0.085, 0.085, 0.090), vec3(0.86, 0.86, 0.83), lane);\n"
+"      road *= 0.85 + 0.30 * grain(p * 5.0);\n"
+"      alb = mix(alb, road, m_flr * k * 0.90);\n"
+/* 가드레일 -- 벽 허리에 박혀 찌그러진 채 */
+"      float gy = abs(wy + 0.30);\n"
+"      float gr = smoothstep(0.115, 0.075, gy);\n"
+"      float wav = smoothstep(0.030, 0.010, abs(gy - 0.055));\n"
+"      float dent = 0.55 + 0.45 * sin(-p.z * 1.7);\n"
+"      alb = mix(alb, vec3(0.52, 0.53, 0.55), upr * gr * k * 0.92);\n"
+"      alb = mix(alb, vec3(0.22, 0.22, 0.24), upr * wav * k * 0.85);\n"
+"      alb = mix(alb, vec3(0.30, 0.14, 0.06),\n"
+"                upr * gr * k * smoothstep(0.55, 0.95, dent) * 0.5);\n"
+"      float post = smoothstep(0.055, 0.022, abs(fract(-p.z * 0.42) - 0.5) * 2.4)\n"
+"                 * smoothstep(-0.20, -1.40, wy);\n"
+"      alb = mix(alb, vec3(0.38, 0.39, 0.40), upr * post * k * 0.8);\n"
+"    }\n"
+"    if (lay(39, -p.z) > 0.02) {\n"
+/* CT-4 여덟 개의 EXIT -- 천장에, 전부 다른 방향. 이 게임에서 초록은 오직
+   출구 색이고, 여덟 번 반복하면 색의 의미가 무너진다. 문 위 표지판과 같은
+   그림(달리는 사람 + 화살표)을 써서 "표지판"으로 확실히 읽히게 한다. */
+"      vec2 bc = (floor(p.xz / 7.0) + 0.5) * 7.0;\n"
+"      vec2 rel = p.xz - bc;\n"
+"      float ai = floor(atan(rel.y, rel.x) / 0.7853981 + 0.5);\n"
+"      float aa = ai * 0.7853981;\n"
+"      vec2  ctr = bc + vec2(cos(aa), sin(aa)) * 2.05;\n"
+"      vec2  d2  = p.xz - ctr;\n"
+"      vec2  q2  = vec2(d2.x * cos(-aa) - d2.y * sin(-aa),\n"
+"                       d2.x * sin(-aa) + d2.y * cos(-aa));\n"
+"      if (m_cei > 0.4 && abs(q2.x) < 0.46 && abs(q2.y) < 0.15) {\n"
+"        vec2 g = vec2(q2.x, q2.y);\n"
+"        float head = step(length(g - vec2(-0.24, 0.055)), 0.030);\n"
+"        float body = step(abs(g.x + 0.24), 0.026) * step(abs(g.y + 0.004), 0.058);\n"
+"        float legs = step(abs(abs(g.x + 0.24) - 0.034), 0.019)\n"
+"                   * step(abs(g.y + 0.082), 0.030);\n"
+"        float arrw = step(0.10, g.x) * step(g.x, 0.34)\n"
+"                   * step(abs(g.y), 0.056 * (1.0 - (g.x - 0.10) / 0.24));\n"
+"        float fig  = clamp(head + body + legs + arrw, 0.0, 1.0);\n"
+"        alb = mix(vec3(0.02, 2.30, 0.16), vec3(2.20, 2.40, 2.20), fig);\n"
+"      }\n"
 "    }\n"
 "    if (uProto == 40) {\n"
 /* FM-2 벽을 보는 창 — 유리 20 cm 뒤가 콘크리트 */
@@ -1314,11 +1412,17 @@ static const char *CAVE_FS =
 "                 + smoothstep(0.024, 0.010, abs(wy - 0.28));\n"
 "      alb = mix(alb, alb * 1.9, smoothstep(0.94, 0.86, we) * clamp(mull, 0.0, 1.0));\n"
 "    }\n"
-"    if (uProto == 42) {\n"
-/* LT-1 깜빡이는 하나 — uTime으로 불규칙하게. 정지 화면은 한 순간만 보인다 */
-"      float flick = step(0.55, fract(sin(floor(uTime * 11.0) * 91.7) * 4371.3));\n"
-"      float fz = abs(mod(p.z + 3.5, 21.0) - 3.5);\n"
-"      alb = mix(alb, alb * flick, m_cei * smoothstep(1.4, 0.9, fz));\n"
+"    if (lay(42, -p.z) > 0.02) {\n"
+/* LT-1 깜빡이는 하나 -- 건물 전체에서 딱 한 등. 나머지는 전부 심장 박동에
+   맞춰 고요히 부푸는데 이것만 불규칙하다. 자꾸 돌아오게 되는 교차로에 둔다. */
+"      vec2 cell = floor(p.xz / 7.0);\n"
+"      if (abs(cell.x - floor(uCorrX / 7.0)) < 0.5 && abs(cell.y + 62.0) < 0.5) {\n"
+"        float t9 = floor(uTime * 13.0);\n"
+"        float fl = step(0.42, fract(sin(t9 * 91.7) * 4371.3));\n"
+"        vec2 pm2 = abs(mod(p.xz, 7.0) - 3.5);\n"
+"        if (max(pm2.x, pm2.y) < 1.16 && m_cei > 0.4)\n"
+"          alb *= mix(0.10, 1.35, fl);\n"
+"      }\n"
 "    }\n"
 "    if (uProto == 43) {\n"
 /* W-2 격리병동 — 바닥 노란 경계선, 음압 표시등, 비닐 커튼 */
@@ -1355,7 +1459,7 @@ static const char *CAVE_FS =
 "                        smoothstep(0.011, 0.004, h2a) * smoothstep(0.140, 0.126, cr));\n"
 "      alb = mix(alb, alb * 0.16, hands * smoothstep(0.170, 0.155, cr));\n"
 "    }\n"
-"    if (uProto == 26) {\n"
+"    if (lay(26, -p.z) > 0.02) {\n"
 /* O-12 안내 게시판 — 읽히지 않는 종이 몇 장, 한 장은 압정 하나에 매달려 */
 "      float be = max(abs(dz2 - 2.80) / 0.62, abs(wy - 0.30) / 0.42);\n"
 "      alb = mix(alb, vec3(0.42, 0.33, 0.22), smoothstep(1.00, 0.92, be));\n"
@@ -1386,7 +1490,7 @@ static const char *CAVE_FS =
 "      alb = mix(alb, alb * 0.30, smoothstep(0.140, 0.118, port)\n"
 "                                * smoothstep(0.100, 0.120, port) * door);\n"
 "    }\n"
-"    if (uProto == 16) {\n"
+"    if (lay(16, -p.z) > 0.02) {\n"
 /* W-4 수술부 — tiled green floor to ceiling, and a red lamp over each door */
 "      vec2 tq = abs(fract(vec2(p.z, wy) * 4.0) - 0.5);\n"
 "      float tl = smoothstep(0.40, 0.47, max(tq.x, tq.y));\n"
@@ -1395,7 +1499,7 @@ static const char *CAVE_FS =
 "      float lamp = max(dz2 / 0.20, abs(wy - 0.92) / 0.075);\n"
 "      alb = mix(alb, vec3(1.60, 0.10, 0.06), smoothstep(1.00, 0.86, lamp));\n"
 "    }\n"
-"    if (uProto == 17) {\n"
+"    if (lay(17, -p.z) > 0.02) {\n"
 /* W-5 영안실 — tiled to the ceiling, and one wall of stainless drawers */
 "      vec2 tq = abs(fract(vec2(p.z, wy) * 5.0) - 0.5);\n"
 "      alb = mix(alb, vec3(0.74, 0.78, 0.79), upr * 0.85);\n"
@@ -1648,7 +1752,32 @@ static const char *CAVE_FS =
    around yours is the only warm thing that happens in it, so it arrives as
    warmth -- and it is the one moment the place stops being somewhere you are
    alone in. */
-"  col = mix(col, col * vec3(1.24, 1.06, 0.88) + vec3(0.09, 0.045, 0.008),\n"
+/* 벽에서 나오는 전조등.
+ *
+ * 이 사람을 여기 데려온 것이 이것이고, 게임에서 딱 한 번 나온다. 방 안에 있는
+ * 광원이 아니라 벽 안에서 나오는 두 개의 점이라 위치가 설명되지 않는다 --
+ * 설명되면 조명기구가 되고, 조명기구는 무섭지 않다. 시야를 실제로 가릴 만큼
+ * 밝게: 눈이 부셔서 그 구간을 지나가는 동안 앞이 잘 안 보여야 한다. */
+"  {\n"
+"    float hk = lay(51, -uCam.z);\n"
+"    if (hk > 0.004) {\n"
+"      float hz = -441.0;\n"
+"      vec2  lc2 = centre(hz);\n"
+"      float hy = mix(lc2.y, uHospY, smoothstep(244.0, 259.0, -hz)) + 0.10;\n"
+"      for (int e = 0; e < 2; e++) {\n"
+"        vec3 lp2 = vec3(uCorrX + (e == 0 ? -0.78 : 0.78), hy, hz);\n"
+"        vec3 tl  = lp2 - uCam;\n"
+"        float dl = length(tl);\n"
+"        vec3  tn = tl / max(dl, 1e-4);\n"
+"        float al = max(dot(rd, tn), 0.0);\n"
+/* the lamp itself, and the glare it throws across everything else */
+"        float core  = pow(al, 9000.0);\n"
+"        float glare = pow(al, 22.0) * 0.55 + pow(al, 3.0) * 0.16;\n"
+"        col += vec3(1.00, 0.97, 0.90) * (core * 6.0 + glare)\n"
+"             * hk * 3.4 / (1.0 + dl * dl * 0.010);\n"
+"      }\n"
+"    }\n"
+"  }\n""  col = mix(col, col * vec3(1.24, 1.06, 0.88) + vec3(0.09, 0.045, 0.008),\n"
 "            uHand * 0.55);\n"
 "  col = mix(mix(vec3(0.010,0.012,0.018) + warm*0.045*uLight,\n"
 "                vec3(0.66, 0.63, 0.55), uRoom), col, fog);\n"/* The sign takes some of the haze and not all of it. Fogged like a wall it
