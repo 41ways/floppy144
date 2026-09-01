@@ -578,6 +578,12 @@ static const char *CAVE_FS =
    not a zone, it is the building, and then nothing has changed. */
 "float zone(float dep, float a, float b){\n"
 "  return smoothstep(a - 5.0, a, dep) * (1.0 - smoothstep(b, b + 5.0, dep)); }\n"
+/* boxes and posts, for the furniture proposals */
+"float bx(vec3 p, vec3 b){ vec3 q = abs(p) - b;\n"
+"  return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0); }\n"
+"float pst(vec3 p, float r, float h){\n"
+"  vec2 d = abs(vec2(length(p.xz), p.y)) - vec2(r, h);\n"
+"  return min(max(d.x, d.y), 0.0) + length(max(d, 0.0)); }\n"
 "float segd(vec3 p, vec3 a, vec3 b){ vec3 pa = p-a, ba = b-a;\n"
 "  float t = clamp(dot(pa,ba)/max(dot(ba,ba),1e-6), 0.0, 1.0);\n"
 "  return length(pa - ba*t); }\n"
@@ -757,6 +763,54 @@ static const char *CAVE_FS =
 "                   1.75 - abs(p.y - fl3 - 1.45)), (uWakeZ + 40.0) - dep);\n"
 "  }\n"
 "  m = mix(m, boxm, uRoom);\n"
+/* ---- 2차 시안: 바닥에 서는 것들 -----------------------------------------
+   Visual only -- these live in the shader field and not in cave_sdf, so you
+   walk through them. That is the right trade for a proposal: it costs one
+   function to look at, and nothing has to be re-verified until somebody
+   decides to keep it. If one is kept it goes into both fields and mazecheck
+   runs again, because a chair in a corridor is a chair you can be trapped by. */
+"  if (uProto == 12) {\n"
+/* O-1 연결 대기 의자 — a three-seat run against the wall, repeated so it goes
+   the length of the corridor: the CT-3 version of the same object. */
+"    float fy = cyh - 1.60;\n"
+"    vec3  q  = p; q.z = mod(p.z + 0.32, 0.64) - 0.32;\n"
+"    vec3  c  = vec3(uCorrX - 1.44, fy + 0.44, 0.0);\n"
+"    float ch = bx(q - c, vec3(0.25, 0.032, 0.25));\n"
+"    ch = min(ch, bx(q - c - vec3(-0.21, 0.26, 0.0), vec3(0.030, 0.25, 0.25)));\n"
+"    ch = min(ch, bx(q - c - vec3(0.0, -0.23, 0.0), vec3(0.19, 0.21, 0.025)));\n"
+"    m = min(m, ch);\n"
+"  }\n"
+"  if (uProto == 13) {\n"
+/* O-2 빈 병상 — one to a bay, made up, rails raised. */
+"    float fy = cyh - 1.60;\n"
+"    vec3  q  = p; q.z = mod(p.z + 3.5, 7.0) - 3.5;\n"
+"    vec3  c  = vec3(uCorrX - 1.15, fy + 0.56, 0.0);\n"
+"    float bd = bx(q - c, vec3(0.42, 0.085, 0.98));\n"
+"    bd = min(bd, bx(q - c - vec3(0.0, -0.30, 0.0), vec3(0.34, 0.22, 0.86)));\n"
+"    bd = min(bd, bx(q - c - vec3(0.0, 0.30, 0.92), vec3(0.40, 0.30, 0.035)));\n"
+"    bd = min(bd, bx(q - c - vec3(0.44, 0.22, 0.30), vec3(0.028, 0.16, 0.42)));\n"
+"    bd = min(bd, bx(q - c - vec3(-0.44, 0.22, 0.30), vec3(0.028, 0.16, 0.42)));\n"
+"    m = min(m, bd);\n"
+"  }\n"
+"  if (uProto == 14) {\n"
+/* O-4 링거대 and O-5 휠체어, the two things that are always in a corridor */
+"    float fy = cyh - 1.60;\n"
+"    vec3  q  = p; q.z = mod(p.z + 3.5, 7.0) - 3.5;\n"
+"    vec3  sc = vec3(uCorrX + 1.30, fy + 0.80, 0.55);\n"
+"    float st = pst(q - sc, 0.020, 0.80);\n"
+"    st = min(st, bx(q - sc - vec3(0.0, 0.82, 0.0), vec3(0.14, 0.016, 0.016)));\n"
+"    st = min(st, bx(q - sc - vec3(-0.11, 0.66, 0.0), vec3(0.055, 0.13, 0.028)));\n"
+"    st = min(st, pst(q - sc - vec3(0.0, -0.78, 0.0), 0.17, 0.012));\n"
+"    vec3  wc = vec3(uCorrX + 1.16, fy + 0.46, -0.85);\n"
+"    float wh = bx(q - wc, vec3(0.22, 0.030, 0.21));\n"
+"    wh = min(wh, bx(q - wc - vec3(0.0, 0.28, -0.19), vec3(0.21, 0.26, 0.030)));\n"
+"    wh = min(wh, pst(vec3(q.y, q.x, q.z) - vec3(wc.y - 0.18, wc.x + 0.24, wc.z),\n"
+"                     0.24, 0.020));\n"
+"    wh = min(wh, pst(vec3(q.y, q.x, q.z) - vec3(wc.y - 0.18, wc.x - 0.24, wc.z),\n"
+"                     0.24, 0.020));\n"
+"    m = min(m, min(st, wh));\n"
+"  }\n"
+
 /* 526, matching WAKE_Z in cave_sdf. It said 525, so the end wall was drawn a
    metre nearer than the one you actually stop against. */
 "  if (uRoad < 0.5) m = min(m, p.z + (uWakeZ + 40.0));\n"
@@ -1047,6 +1101,94 @@ static const char *CAVE_FS =
 "               * smoothstep(dc - 0.62 * dh, dc - 0.70 * dh, wy) * door;\n"
 "    alb = mix(alb, alb * 2.05, upr * vis  * uRoom);\n"
 "    alb = mix(alb, alb * 1.45, upr * kick * uRoom);\n"
+/* ---- 2차 시안: 벽에 붙는 것들과 병동 마감 ------------------------------
+   All albedo, all read off the wall's own coordinates, all behind uProto.
+   dz2 is distance to the nearest door centre along the wall, so anything
+   placed against it sits beside a door the way real fittings do. */
+"    if (uProto == 10) {\n"
+/* O-11 병실 명패 — a plate beside every door, room number on it, name slot
+   blank. The only proposal that improves wayfinding while it unsettles. */
+"      float pe = max(abs(dz2 - 1.42) / 0.30, abs(wy - 0.34) / 0.115);\n"
+"      alb = mix(alb, alb * 1.42, smoothstep(1.00, 0.90, pe));\n"
+"      float slot = max(abs(dz2 - 1.42) / 0.24, abs(wy - 0.30) / 0.055);\n"
+"      alb = mix(alb, alb * 0.34, smoothstep(1.00, 0.86, slot));\n"
+"      float num = max(abs(dz2 - 1.42) / 0.20, abs(wy - 0.395) / 0.035);\n"
+"      alb = mix(alb, alb * 0.22,\n"
+"                smoothstep(1.0, 0.88, num) * step(0.45, fract(dz2 * 26.0)));\n"
+"    }\n"
+"    if (uProto == 11) {\n"
+/* O-9 손소독제 · O-10 소화기함 · O-14 산소 배관구, all at once so the
+   corridor gets its rhythm back */
+"      float dsp = max(abs(dz2 - 1.72) / 0.085, abs(wy - 0.10) / 0.145);\n"
+"      alb = mix(alb, alb * 0.55, smoothstep(1.00, 0.88, dsp));\n"
+"      float fz = abs(mod(p.z + 10.5, 21.0) - 10.5);\n"
+"      float ext = max(fz / 0.28, abs(wy + 0.06) / 0.42);\n"
+"      alb = mix(alb, vec3(0.46, 0.055, 0.045), smoothstep(1.00, 0.90, ext) * 0.92);\n"
+"      alb = mix(alb, vec3(0.75, 0.74, 0.70),\n"
+"                smoothstep(0.86, 0.74, ext) * smoothstep(0.50, 0.62, ext));\n"
+"      float hw = max(abs(dz2 - 2.35) / 0.62, abs(wy - 0.46) / 0.085);\n"
+"      alb = mix(alb, alb * 1.30, smoothstep(1.00, 0.90, hw));\n"
+"      alb = mix(alb, alb * 0.40,\n"
+"                smoothstep(1.0, 0.85, hw) * step(0.62, fract(dz2 * 5.5)));\n"
+"    }\n"
+"    if (uProto == 15) {\n"
+/* W-3 폐쇄병동 — padding, an observation port in every door, and the wall
+   quilted where a wall should be flat */
+"      float q = sin(p.z * 7.4) * sin(wy * 7.4);\n"
+"      alb = mix(alb, alb * (0.90 + 0.16 * q), upr * 0.85);\n"
+"      alb = mix(alb, vec3(0.60, 0.62, 0.58), upr * 0.35);\n"
+"      float port = length(vec2(dz2, wy + 0.10) - vec2(0.0, 0.42));\n"
+"      alb = mix(alb, alb * 2.30, smoothstep(0.115, 0.085, port) * door);\n"
+"      alb = mix(alb, alb * 0.30, smoothstep(0.140, 0.118, port)\n"
+"                                * smoothstep(0.100, 0.120, port) * door);\n"
+"    }\n"
+"    if (uProto == 16) {\n"
+/* W-4 수술부 — tiled green floor to ceiling, and a red lamp over each door */
+"      vec2 tq = abs(fract(vec2(p.z, wy) * 4.0) - 0.5);\n"
+"      float tl = smoothstep(0.40, 0.47, max(tq.x, tq.y));\n"
+"      alb = mix(alb, vec3(0.42, 0.60, 0.55), upr * 0.80);\n"
+"      alb = mix(alb, alb * 0.74, upr * tl * 0.9);\n"
+"      float lamp = max(dz2 / 0.20, abs(wy - 0.92) / 0.075);\n"
+"      alb = mix(alb, vec3(1.60, 0.10, 0.06), smoothstep(1.00, 0.86, lamp));\n"
+"    }\n"
+"    if (uProto == 17) {\n"
+/* W-5 영안실 — tiled to the ceiling, and one wall of stainless drawers */
+"      vec2 tq = abs(fract(vec2(p.z, wy) * 5.0) - 0.5);\n"
+"      alb = mix(alb, vec3(0.74, 0.78, 0.79), upr * 0.85);\n"
+"      alb = mix(alb, alb * 0.80, upr * smoothstep(0.41, 0.48, max(tq.x, tq.y)));\n"
+"      vec2 dq = abs(fract(vec2(p.z * 1.6, (wy + 1.7) * 1.5)) - 0.5);\n"
+"      float drw = step(0.0, n.x) * upr\n"
+"                * smoothstep(-1.72, -1.60, wy) * smoothstep(0.90, 0.76, wy);\n"
+"      alb = mix(alb, vec3(0.62, 0.65, 0.67), drw * 0.9);\n"
+"      alb = mix(alb, alb * 0.42, drw * smoothstep(0.40, 0.47, max(dq.x, dq.y)));\n"
+"      alb = mix(alb, alb * 1.60, drw * smoothstep(0.10, 0.04, abs(dq.x - 0.22))\n"
+"                                     * smoothstep(0.16, 0.10, abs(dq.y)));\n"
+"    }\n"
+"    if (uProto == 18) {\n"
+/* W-1 소아병동 — everything a hand lower, and a faded border where the dado
+   would be. The proportions are all correct; they are correct for a child. */
+"      alb = mix(alb, alb * 1.06, upr * 0.5);\n"
+"      float band = smoothstep(0.10, 0.05, abs(wy + 0.62));\n"
+"      float hue  = fract(p.z * 0.28);\n"
+"      vec3  toy  = mix(vec3(0.85, 0.62, 0.30), vec3(0.42, 0.66, 0.78),\n"
+"                       step(0.5, fract(p.z * 1.4)));\n"
+"      alb = mix(alb, toy, upr * band * (0.55 + 0.25 * sin(hue * 18.0)));\n"
+"      float lorail = smoothstep(0.045, 0.022, abs(wy + 1.10));\n"
+"      alb = mix(alb, alb * 0.45, upr * lorail * near);\n"
+"    }\n"
+"    if (uProto == 19) {\n"
+/* W-10 기계실 — no finishes at all. Concrete, duct, cable tray, and the
+   building with its back to you. */
+"      alb = mix(alb, vec3(0.44, 0.44, 0.43) * (0.86 + 0.28 * grain(p * 1.6)),\n"
+"                (upr + m_cei) * 0.92);\n"
+"      float duct = max(abs(p.x - 0.9) / 0.42, abs(wy - 1.10) / 0.26);\n"
+"      alb = mix(alb, vec3(0.55, 0.56, 0.54), smoothstep(1.00, 0.90, duct));\n"
+"      alb = mix(alb, alb * 0.62,\n"
+"                smoothstep(1.0, 0.9, duct) * step(0.72, fract(p.z * 3.2)));\n"
+"      float tray = max(abs(p.x + 1.4) / 0.22, abs(wy - 1.34) / 0.055);\n"
+"      alb = mix(alb, vec3(0.30, 0.31, 0.30), smoothstep(1.00, 0.88, tray));\n"
+"    }\n"
+
 "  }\n"
 /* Ceiling panels on the same seven-metre grid as the pillars -- and not all
    of them working. A corridor where every fixture is identical and every one
