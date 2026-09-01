@@ -35,6 +35,8 @@ the file is fine; renaming or splitting cave_sdf is what would need attention.
 """
 import pathlib
 import re
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -272,14 +274,29 @@ def main(argv):
     with tempfile.TemporaryDirectory() as tmp:
         tmp = pathlib.Path(tmp)
         (tmp / "mazecheck.c").write_text(src, encoding="utf-8")
-        build = subprocess.run(
-            ["cc", "-O2", "-std=c99", "-w", str(tmp / "mazecheck.c"),
-             "-o", str(tmp / "mazecheck"), "-lm"],
-            capture_output=True, text=True)
+        # "cc" is not a name Windows has, and an executable there needs the
+        # extension, so the host compiler is looked up rather than assumed.
+        exe = tmp / ("mazecheck.exe" if os.name == "nt" else "mazecheck")
+        names = [os.environ["CC"]] if os.environ.get("CC") else []
+        names += ["cc", "gcc", "clang", "x86_64-w64-mingw32-gcc"]
+        build = None
+        for name in names:
+            found = shutil.which(name)
+            if not found:
+                continue
+            build = subprocess.run(
+                [found, "-O2", "-std=c99", "-w", str(tmp / "mazecheck.c"),
+                 "-o", str(exe), "-lm"],
+                capture_output=True, text=True)
+            if build.returncode == 0:
+                break
+        if build is None:
+            sys.stderr.write("no C compiler found (tried %s)\n" % ", ".join(names))
+            return 2
         if build.returncode:
             sys.stderr.write(build.stderr)
             return 2
-        return subprocess.run([str(tmp / "mazecheck")] + args).returncode
+        return subprocess.run([str(exe)] + args).returncode
 
 
 if __name__ == "__main__":

@@ -497,6 +497,115 @@ static float rooms_air(float x, float y, float z, float floor_y)
     return air;
 }
 
+/* --- what the building has standing in it -------------------------------
+ *
+ * The shader grew furniture and the collision field did not, so every chair
+ * and trolley in the place was a picture you walked through. These are the
+ * same boxes and posts field() draws, transcribed - the two have to agree
+ * or the building lies to you.
+ *
+ * Only the ones lay() actually turns on in a shipped build are here. The
+ * three proposals that change the room itself are placed by lay() at depths
+ * where their own zone() is zero, so they never appear at all; they are left
+ * out until that is reconciled.
+ */
+static float ob_zone(float dep, float a, float b)
+{
+    return smoothstep01(a - 5.0f, a, dep) * (1.0f - smoothstep01(b, b + 5.0f, dep));
+}
+
+static float ob_box(float px, float py, float pz, float bx, float by, float bz)
+{
+    float qx = (float)fabs(px) - bx;
+    float qy = (float)fabs(py) - by;
+    float qz = (float)fabs(pz) - bz;
+    float mx = qx > 0.0f ? qx : 0.0f;
+    float my = qy > 0.0f ? qy : 0.0f;
+    float mz = qz > 0.0f ? qz : 0.0f;
+    float inside = qx > qy ? qx : qy;
+    if (qz > inside) inside = qz;
+    if (inside > 0.0f) inside = 0.0f;
+    return (float)sqrt(mx * mx + my * my + mz * mz) + inside;
+}
+
+/* a capped cylinder about the y axis, like the shader's pst() */
+static float ob_post(float px, float py, float pz, float r, float h)
+{
+    float dx = (float)sqrt(px * px + pz * pz) - r;
+    float dy = (float)fabs(py) - h;
+    float mx = dx > 0.0f ? dx : 0.0f;
+    float my = dy > 0.0f ? dy : 0.0f;
+    float inside = dx > dy ? dx : dy;
+    if (inside > 0.0f) inside = 0.0f;
+    return inside + (float)sqrt(mx * mx + my * my);
+}
+
+/* Negative inside an object. Returns the air distance, so the caller mins it
+ * against the room the way the shader does. */
+static float ward_objects(float x, float y, float z, float cyh)
+{
+    float dep = -z;
+    float fy  = cyh - 1.60f;
+    float o   = 1e9f;
+    float qz  = (float)fmod((float)fmod(z + 3.5f, 7.0f) + 7.0f, 7.0f) - 3.5f;
+    float cx, cy2, cz2;
+
+    if (ob_zone(dep, 356.0f, 364.0f) > 0.02f) {          /* O-6 treatment cart */
+        cx = g_corr_x - 1.30f; cy2 = fy + 0.46f; cz2 = 0.0f;
+        o = ob_box(x - cx, y - cy2, qz - cz2, 0.24f, 0.36f, 0.19f);
+        { float t = ob_box(x - cx, y - cy2 - 0.42f, qz - cz2, 0.27f, 0.022f, 0.22f);
+          if (t < o) o = t; }
+        { float t = ob_box(x - cx, y - cy2 - 0.06f, qz - cz2 - 0.26f, 0.22f, 0.075f, 0.09f);
+          if (t < o) o = t; }
+        { float t = ob_post(x - cx - 0.19f, y - cy2 + 0.42f, qz - cz2 - 0.14f, 0.035f, 0.035f);
+          if (t < o) o = t; }
+        { float t = ob_post(x - cx + 0.19f, y - cy2 + 0.42f, qz - cz2 - 0.14f, 0.035f, 0.035f);
+          if (t < o) o = t; }
+    } else if (ob_zone(dep, 306.0f, 312.0f) > 0.02f) {   /* O-7 linen cart */
+        cx = g_corr_x - 1.32f; cy2 = fy + 0.40f;
+        o = ob_box(x - cx, y - cy2, qz, 0.30f, 0.30f, 0.22f);
+        { float t = ob_box(x - cx, y - cy2 - 0.34f, qz, 0.28f, 0.10f, 0.20f);
+          if (t < o) o = t; }
+        { float t = ob_box(x - cx - 0.06f, y - cy2 - 0.44f, qz - 0.03f, 0.20f, 0.06f, 0.15f);
+          if (t < o) o = t; }
+    } else if (ob_zone(dep, 452.0f, 458.0f) > 0.02f) {   /* O-8 cleaning cart */
+        cx = g_corr_x - 1.25f; cy2 = fy + 0.30f;
+        o = ob_post(x - cx, y - cy2, qz, 0.16f, 0.24f);
+        { float t = ob_post(x - cx, y - cy2 - 0.62f, qz, 0.022f, 0.42f);
+          if (t < o) o = t; }
+        { float sx = g_corr_x + 0.10f, sy = fy + 0.30f, sz = 1.2f;
+          float s1 = ob_box(x - sx, y - sy, qz - sz + 0.10f, 0.18f, 0.30f, 0.012f);
+          float s2 = ob_box(x - sx, y - sy, qz - sz - 0.10f, 0.18f, 0.30f, 0.012f);
+          if (s1 < o) o = s1;
+          if (s2 < o) o = s2; }
+    } else if (ob_zone(dep, 466.0f, 472.0f) > 0.02f) {   /* O-16 waste bin */
+        cx = g_corr_x - 1.44f; cy2 = fy + 0.34f;
+        o = ob_post(x - cx, y - cy2, qz, 0.20f, 0.34f);
+        { float t = ob_post(x - cx, y - cy2 - 0.37f, qz, 0.21f, 0.028f);
+          if (t < o) o = t; }
+    } else if (ob_zone(dep, 360.0f, 368.0f) > 0.02f) {   /* O-17 water cooler */
+        cx = g_corr_x - 1.40f; cy2 = fy + 0.55f;
+        o = ob_box(x - cx, y - cy2, qz, 0.16f, 0.55f, 0.19f);
+        { float t = ob_post(x - cx, y - cy2 - 0.78f, qz, 0.145f, 0.24f);
+          if (t < o) o = t; }
+        { float t = ob_box(x - cx - 0.17f, y - cy2 - 0.10f, qz, 0.045f, 0.05f, 0.05f);
+          if (t < o) o = t; }
+    }
+
+    if (ob_zone(dep, 268.0f, 286.0f) > 0.02f) {          /* O-1 the seat run */
+        float rz = (float)fmod((float)fmod(z + 0.32f, 0.64f) + 0.64f, 0.64f) - 0.32f;
+        float ccx = g_corr_x - 1.44f, ccy = fy + 0.44f;
+        float ch = ob_box(x - ccx, y - ccy, rz, 0.25f, 0.032f, 0.25f);
+        { float t = ob_box(x - ccx + 0.21f, y - ccy - 0.26f, rz, 0.030f, 0.25f, 0.25f);
+          if (t < ch) ch = t; }
+        { float t = ob_box(x - ccx, y - ccy + 0.23f, rz, 0.19f, 0.21f, 0.025f);
+          if (t < ch) ch = t; }
+        if (ch < o) o = ch;
+    }
+    return o;
+}
+
+
 /* where the doorway sits in row ri of the hall maze */
 static float tunnel_gapx(float ri)
 {
@@ -560,6 +669,10 @@ static float cave_sdf(float x, float y, float z)
             float st2  = smoothstep01(GATE_2 + 4.0f, GATE_2 + 19.0f, -z);
             float cyh  = cy * (1.0f - st2) + g_hosp_y * st2;
             float hall = rooms_air(x, y, z, cyh - 1.35f);
+            {   /* the things standing in it are solid too */
+                float ob = ward_objects(x, y, z, cyh);
+                if (ob < hall) hall = ob;
+            }
             float dep  = -z;
             if (dep > CORR_Z - 3.0f) {
                 /* A T. One cross-corridor along the end of the rooms, which
