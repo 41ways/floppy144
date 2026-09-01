@@ -48,7 +48,15 @@ static const char *POINT_VS =
    swells as the sweep crosses it and settles back rather than going
    dark and coming on again. */
 "  float lit = max(max(max(front, memory), close), uBase);\n"
-"  vBright = mix(lit, 1.0, uFlat) * min(aGain, 1.45) * uFade;\n"
+/* The borrowed light does not dim with the room. uFade exists to let the
+   sounding step back as the building lights up -- which is right for marks
+   you made, and wrong for the two kinds you did not: the defibrillator, and
+   the pulse from the heart that knows where the door is. Those are a signal
+   from outside, and inside the building they were being multiplied down to a
+   tenth against walls at four fifths, so the one hint the maze gives you was
+   invisible in the only place it is needed. Gain over 1.5 is that light. */
+"  float fade = mix(uFade, 1.0, step(1.5, aGain));\n"
+"  vBright = mix(lit, 1.0, uFlat) * min(aGain, 1.45) * fade;\n"
 "  gl_PointSize = mix(clamp(230.0 / max(clip.w, 0.25), 2.0, 5.4), 2.0, uFlat);\n"
 /* A returned mark is one speck of a wall and the cloud is sparse, so it is
    drawn fat enough to be seen. A monster is six thousand points inside a body
