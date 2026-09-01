@@ -626,6 +626,24 @@ static float ward_objects(float x, float y, float z, float cyh)
           if (t < o) o = t; }
     }
 
+    if (ob_zone(dep, 368.0f, 382.0f) > 0.02f) {          /* W-8 the waiting area */
+        float rz = (float)fmod((float)fmod(z + 0.32f, 0.64f) + 0.64f, 0.64f) - 0.32f;
+        float ccx = g_corr_x - 1.44f, ccy = fy + 0.44f;
+        float ch = ob_box(x - ccx, y - ccy, rz, 0.25f, 0.032f, 0.25f);
+        { float t = ob_box(x - ccx + 0.21f, y - ccy - 0.26f, rz, 0.030f, 0.25f, 0.25f);
+          if (t < ch) ch = t; }
+        { float t = ob_box(x - ccx, y - ccy + 0.23f, rz, 0.19f, 0.21f, 0.025f);
+          if (t < ch) ch = t; }
+        /* and the counter, which is one object rather than a repeat */
+        { float t = ob_box(x - (g_corr_x + 1.30f), y - (fy + 0.55f), z + 534.0f,
+                           0.45f, 0.55f, 1.6f);
+          if (t < ch) ch = t; }
+        { float t = ob_box(x - (g_corr_x + 1.10f), y - (fy + 1.14f), z + 534.0f,
+                           0.62f, 0.05f, 1.7f);
+          if (t < ch) ch = t; }
+        if (ch < o) o = ch;
+    }
+
     if (ob_zone(dep, 268.0f, 286.0f) > 0.02f) {          /* O-1 the seat run */
         float rz = (float)fmod((float)fmod(z + 0.32f, 0.64f) + 0.64f, 0.64f) - 0.32f;
         float ccx = g_corr_x - 1.44f, ccy = fy + 0.44f;
@@ -3044,7 +3062,7 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
                 if (g_wetfeet < 0.0f) g_wetfeet = 0.0f;
             }
             g_step_acc += moved;
-            if (g_step_acc > 1.55f) {
+            if (g_step_acc > 1.95f) {
                 g_step_acc = 0.0f;
                 audio_step(g_wetfeet);
                 g_steps++;
@@ -3158,7 +3176,7 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
         g_beat += dt * (g_bpm / 60.0f);
         if (g_beat >= 1.0f) {
             g_beat -= 1.0f;
-            if (g_stage >= 3) {
+            if (-g_pz > GATE_2 + 4.0f) {
                 int mi;
                 audio_beat();
                 for (mi = 0; mi < g_mon_count; mi++)
@@ -3174,7 +3192,11 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
          * softer and close behind the first, and neither of them is a step --
          * so this is two smooth swells, lub and dub, and the room breathes
          * instead of stuttering. */
-        if (g_stage >= 3) {
+        /* Wherever the building is. This was g_stage >= 3, which is 360 m,
+         * so the lights kept a dead face through the whole first half of the
+         * ward -- the same boundary the sounding had wrong. Measured before:
+         * the screen moved 0.1% across a beat, which is nothing. */
+        if (-g_pz > GATE_2 + 4.0f) {
             float ph = g_beat;
             float d1 = (ph - 0.10f) / 0.085f;
             float d2 = (ph - 0.32f) / 0.060f;

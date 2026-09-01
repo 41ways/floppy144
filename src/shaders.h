@@ -1666,7 +1666,11 @@ static const char *CAVE_FS =
 "    float greenZ = max(zone(-p.z, 336.0, 354.0), zone(-p.z, 462.0, 480.0));\n"
 "    vec3 pan = mix(vec3(0.94, 1.00, 0.96), vec3(0.40, 1.22, 0.58),\n"
 "                   max(greenZ, uProto == 3 ? 1.0 : 0.0)) * uRoom\n"
-"             * (0.78 + 0.95 * uBlink + 2.30 * uWard) * (1.0 - 0.72 * uDark);\n"
+/* The swing was 0.78 to 1.73 every beat, which is the room doubling in
+   brightness once a second and is painful to look at for eight minutes.
+   The beat should be felt at the edge of vision, not stared into: the
+   floor sits bright and the pulse rides on top of it. */
+"             * (0.94 + 0.52 * uBlink + 2.30 * uWard) * (1.0 - 0.72 * uDark);\n"
 "    for (int px = 0; px < 2; px++)\n"
 "    for (int pz = 0; pz < 2; pz++) {\n"
 "      vec2 pcv = base + vec2(float(px), float(pz)) * 7.0;\n"
@@ -1834,8 +1838,8 @@ static const char *CAVE_FS =
 "    vec3  hv2 = normalize(ld2 + vv);\n"
 "    float spec = pow(max(dot(bn, hv2), 0.0), 48.0);\n"
 "    float rim  = pow(1.0 - max(dot(bn, vv), 0.0), 5.0);\n"
-"    col  = bc * (0.22 * amb + 1.25 * lam) * (0.85 + 0.80 * uBlink);\n"
-"    col += vec3(0.95, 0.92, 0.88) * spec * (0.80 + 0.75 * uBlink);\n"
+"    col  = bc * (0.22 * amb + 1.25 * lam) * (1.00 + 0.32 * uBlink);\n"
+"    col += vec3(0.95, 0.92, 0.88) * spec * (0.95 + 0.30 * uBlink);\n"
 "    col += vec3(0.40, 0.08, 0.06) * rim * 0.22;   // wet edge\n"
 "    col += vec3(0.9, 0.95, 1.0) * beastStun * 0.50;\n"
 "  }\n"

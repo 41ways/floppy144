@@ -116,10 +116,10 @@ static float voice_sample(Voice *v)
         float w   = v->p;
         float dry = (frand() * (float)exp(-x * 26.0)
            + (float)sin(6.2831853 * 95.0 * v->t) * (float)exp(-x * 18.0) * 0.5f
-           + (float)sin(6.2831853 * 1450.0 * v->t) * (float)exp(-x * 40.0) * 0.06f) * 0.30f;
+           + (float)sin(6.2831853 * 1450.0 * v->t) * (float)exp(-x * 40.0) * 0.06f) * 0.135f;
         float wet = (frand() * (float)exp(-x * 6.5)
            + (float)sin(6.2831853 * 2400.0 * v->t) * (float)exp(-x * 13.0) * 0.22f
-           + (float)sin(6.2831853 * 62.0 * v->t) * (float)exp(-x * 9.0) * 0.35f) * 0.30f;
+           + (float)sin(6.2831853 * 62.0 * v->t) * (float)exp(-x * 9.0) * 0.35f) * 0.135f;
         s = dry * (1.0f - 0.35f * w) + wet * w;
     } else if (v->kind == V_MONITOR) {
         /* The one sound everybody knows means somebody is still alive. Two
@@ -142,9 +142,21 @@ static float voice_sample(Voice *v)
     } else if (v->kind == V_BEAT) {
         /* The lights striking: the thump of the heart under it, and the tick
          * of a tube igniting over the top. */
-        float th = (float)sin(6.2831853 * 46.0 * v->t) * (float)exp(-x * 9.0);
-        float tk = frand() * (float)exp(-x * 34.0);
-        s = (th * 0.75f + tk * 0.35f) * 0.30f;
+        /* Lub-dub, the way the lights blink: a low first thump and a shorter,
+         * higher second one a fifth of a second behind it, with the tick of a
+         * fluorescent tube striking over the top of each. One thump and a
+         * click was a machine; two is a heart. */
+        float t1 = v->t;
+        float t2 = v->t - 0.19f;
+        float th = (float)sin(6.2831853 * 42.0 * t1) * (float)exp(-t1 * 13.0);
+        float tk = frand() * (float)exp(-t1 * 42.0);
+        s = (th * 0.90f + tk * 0.30f);
+        if (t2 > 0.0f) {
+            float th2 = (float)sin(6.2831853 * 58.0 * t2) * (float)exp(-t2 * 19.0);
+            float tk2 = frand() * (float)exp(-t2 * 48.0);
+            s += (th2 * 0.62f + tk2 * 0.20f);
+        }
+        s *= 0.42f;
     } else if (v->kind == V_DEFIB) {
         /* the whine of the charge, the thump of it landing, and two beats of
          * a heart deciding to continue */
