@@ -36,6 +36,7 @@ static int g_height   = WIN_H;
 static int g_captured = 0;     /* mouse locked to the window centre */
 static int g_ping     = 0;     /* a click arrived since the last frame */
 static float shot_pitch = 0.0f;   /* -pitch: verify ground lock */
+static int   game_proto_pending = 0;   /* -proto N */
 static int g_menu     = 0;
 static int g_enter    = 0;
 
@@ -379,6 +380,10 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 
     if (cmd && strstr(cmd, "-depth")) sscanf(strstr(cmd, "-depth") + 6, "%f", &start_depth);
     if (cmd && strstr(cmd, "-pitch")) sscanf(strstr(cmd, "-pitch") + 6, "%f", &shot_pitch);
+    if (cmd && strstr(cmd, "-proto")) {
+        int pn = 0; sscanf(strstr(cmd, "-proto") + 6, "%d", &pn);
+        game_proto_pending = pn;
+    }
 
     if (cmd && strstr(cmd, "-shot")) {
         g_headless = 1;
@@ -484,6 +489,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
                            : (unsigned)(start.QuadPart ^ (start.QuadPart >> 32)),
               start_depth);
 
+    game_set_proto(game_proto_pending);
     if (cmd && strstr(cmd, "-probe")) { game_probe(); ExitProcess(0); }
 
     if (g_headless) {

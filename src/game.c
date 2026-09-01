@@ -141,7 +141,7 @@ static GLint  w_res, w_time, w_open, w_bright, w_sharp, w_lamp, w_lampb;
 static GLuint g_cave_prog;
 static GLint  c_res, c_cam, c_fwd, c_right, c_up, c_seed, c_wander,
               c_rough, c_time, c_light, c_wet, c_room, c_road, c_white, c_wakez,
-              c_ward, c_hand, c_choke, c_dark, c_rain, c_alarm,
+              c_ward, c_hand, c_choke, c_dark, c_rain, c_alarm, c_proto,
               c_pulse, c_hospy, c_blink, c_corrx, c_dooru, c_lampout,
               c_monn, c_monp, c_mond, c_bra, c_brb;
 static GLint  u_fade, u_grey;
@@ -1397,6 +1397,7 @@ static float g_dark;        /* visiting hours are over and the ward is empty */
 static float g_rain;        /* they are washing you, and in here it comes down */
 static float g_alarm;       /* the monitor is unhappy about something */
 static float g_stretch;     /* the bed is moving and the corridor does not agree */
+static int   g_proto;       /* -proto N: draw one of the wrongness proposals */
 static int   g_fx_kind;     /* what the last line set going */
 static float g_fx_wait;     /* and how long until it does it */
 static int   g_days;        /* fifteen at its door, and climbing */
@@ -2273,6 +2274,7 @@ void game_init(unsigned seed, float start_depth)
     c_dark   = glGetUniformLocation(g_cave_prog, "uDark");
     c_rain   = glGetUniformLocation(g_cave_prog, "uRain");
     c_alarm  = glGetUniformLocation(g_cave_prog, "uAlarm");
+    c_proto  = glGetUniformLocation(g_cave_prog, "uProto");
     c_dooru  = glGetUniformLocation(g_cave_prog, "uDoor");
     c_lampout= glGetUniformLocation(g_cave_prog, "uLampOut");
     c_monn   = glGetUniformLocation(g_cave_prog, "uMonN");
@@ -2636,6 +2638,7 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
             glUniform1f(c_dark, g_dark);
             glUniform1f(c_rain, g_rain);
             glUniform1f(c_alarm, g_alarm);
+            glUniform1i(c_proto, g_proto);
             glUniform1f(c_dooru, g_door_open);
             glUniform3fv(c_bra, 16, bra);
             glUniform3fv(c_brb, 16, brb);
@@ -3359,6 +3362,7 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
             glUniform1f(c_dark, g_dark);
             glUniform1f(c_rain, g_rain);
             glUniform1f(c_alarm, g_alarm);
+            glUniform1i(c_proto, g_proto);
             glUniform1f(c_dooru, g_door_open);
             glUniform1f(c_lampout, g_lamp_out);
             {   /* Indoors the things are geometry, not returns: the shader
@@ -3773,3 +3777,5 @@ int   game_steps(void)       { return g_steps; }
 int   game_heard(void)       { return g_heard_n; }
 int   game_menu_sel(void)    { return g_menu_sel; }
 int   game_menu_mode(void)   { return g_menu_mode; }
+
+void game_set_proto(int n) { g_proto = n; }

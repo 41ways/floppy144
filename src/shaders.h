@@ -536,6 +536,9 @@ static const char *CAVE_FS =
 "uniform float uDark;    // the ward went home\n"
 "uniform float uRain;    // they are washing the body\n"
 "uniform float uAlarm;   // the monitor is unhappy\n"
+/* -proto N: draw one of the wrongness proposals so it can be looked at
+   before anybody commits to it. 0 is the building as it ships. */
+"uniform int   uProto;\n"
 "uniform float uDoor;     // 1 once it is open\n"
 "uniform float uLampOut;  // 1 once the bulb has gone\n"
 "uniform int   uMonN;\n"
@@ -949,11 +952,19 @@ static const char *CAVE_FS =
    it, and it is most of what makes the place read as built. */
 "    float dado = smoothstep(-0.88, -0.74, wy);\n"
 "    alb *= mix(1.0, mix(0.70, 1.10, dado), upr * uRoom);\n"
+"    if (uProto == 4)\n"
+"      alb = mix(alb, vec3(0.30, 0.055, 0.045),\n"
+"                upr * (1.0 - dado) * uRoom * 0.92);\n"
 /* and doors. Shut, one to a bay, with a frame around them. A corridor with
    nothing off it is a tube; a corridor lined with doors that do not open is
    the thing this place is supposed to be. */
-"    float dz2   = abs(mod(p.z + 3.5, 7.0) - 3.5);\n"
-"    float e1    = max(dz2 / 1.00, abs(wy + 0.72) / 1.02);\n"
+"    float dpitch = (uProto == 2) ? 0.75 : 7.0;\n"
+"    float dw     = (uProto == 2) ? 0.30 : 1.00;\n"
+"    float dh     = (uProto == 5) ? 1.70 : (uProto == 6 ? 0.575 : 1.02);\n"
+"    float dc     = (uProto == 5) ? -0.04 : (uProto == 6 ? -1.165\n"
+"                 : (uProto == 7 ? 1.28 : -0.72));\n"
+"    float dz2   = abs(mod(p.z + dpitch * 0.5, dpitch) - dpitch * 0.5);\n"
+"    float e1    = max(dz2 / dw, abs(wy - dc) / dh);\n"
 "    float door  = smoothstep(1.00, 0.93, e1);\n"
 "    float frame = smoothstep(0.90, 0.99, e1) * smoothstep(1.16, 1.03, e1);\n"
 "    alb = mix(alb, alb * 0.52, upr * door  * uRoom);\n"
@@ -961,10 +972,11 @@ static const char *CAVE_FS =
 /* What a ward door has: a wired-glass vision panel at head height, and a
    steel kickplate at the bottom where it gets shoved open. Two rectangles,
    and the door stops being a darker patch of wall. */
-"    float vis  = smoothstep(0.52, 0.44, max(dz2 / 0.30, abs(wy + 0.12) / 0.34))\n"
+"    float vis  = smoothstep(0.52, 0.44, max(dz2 / (0.30 * dw),\n"
+"                                        abs(wy - dc - 0.60 * dh) / (0.34 * dh)))\n"
 "               * door;\n"
-"    float kick = smoothstep(0.99, 0.90, dz2 / 1.00)\n"
-"               * smoothstep(-1.36, -1.44, wy) * door;\n"
+"    float kick = smoothstep(0.99, 0.90, dz2 / dw)\n"
+"               * smoothstep(dc - 0.62 * dh, dc - 0.70 * dh, wy) * door;\n"
 "    alb = mix(alb, alb * 2.05, upr * vis  * uRoom);\n"
 "    alb = mix(alb, alb * 1.45, upr * kick * uRoom);\n"
 "  }\n"
@@ -974,6 +986,20 @@ static const char *CAVE_FS =
    which is what a real ceiling looks like and is most of why the far end of
    this place now feels like somewhere nobody has been for a while. The value
    comes from the cell, so it is the same panel every frame. */
+/* the proposals that are not on a wall */
+"  if (uProto == 1 && uRoom > 0.5 && m_cei > 0.4) {\n"
+/* PL-1: a ward door, complete, set into the ceiling */
+"    vec2  cd = abs(mod(p.xz + vec2(1.75, 3.5), vec2(3.5, 7.0)) - vec2(1.75, 3.5));\n"
+"    float ce = max(cd.x / 0.52, cd.y / 1.05);\n"
+"    alb = mix(alb, alb * 0.42, smoothstep(1.00, 0.93, ce));\n"
+"    alb = mix(alb, alb * 1.35, smoothstep(0.90, 0.99, ce) * smoothstep(1.14, 1.03, ce));\n"
+"    alb = mix(alb, alb * 2.10, smoothstep(0.50, 0.42, max(cd.x / 0.17, cd.y / 0.36)));\n"
+"  }\n"
+"  if (uProto == 8 && uRoom > 0.3) {\n"
+/* CL-3: the same building, twenty years older */
+"    alb *= vec3(1.06, 0.97, 0.74);\n"
+"    alb *= 0.86 + 0.22 * grain(p * 1.1);\n"
+"  }\n"
 "  float plive = 1.0;\n"
 "  if (uRoom > 0.15) {\n"
 "    vec2 pcell = floor(p.xz / 7.0);\n"
@@ -1059,7 +1085,8 @@ static const char *CAVE_FS =
    the fittings now sit at a readable level and swell on the beat. */
 /* The heart drives the swell; a hand on a switch out in the ward drives all
    of them at once, which is a different thing and has to look like one. */
-"    vec3 pan = vec3(0.94, 1.00, 0.96) * uRoom\n"
+"    vec3 pan = ((uProto == 3) ? vec3(0.42, 1.20, 0.60)\n"
+"                             : vec3(0.94, 1.00, 0.96)) * uRoom\n"
 "             * (0.78 + 0.95 * uBlink + 2.30 * uWard) * (1.0 - 0.72 * uDark);\n"
 "    for (int px = 0; px < 2; px++)\n"
 "    for (int pz = 0; pz < 2; pz++) {\n"
