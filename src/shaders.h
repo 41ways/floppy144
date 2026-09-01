@@ -353,6 +353,13 @@ static const char *CAVE_FS =
 "uniform float uHospY;    // the height the building is built at\n"
 "uniform float uBlink;    // the heart, in the fluorescents\n"
 "uniform float uCorrX;    // the corridor runs down this line\n"
+/* WAKE_Z, fed rather than copied. This shader had 526 hardcoded in nine
+   places from when WAKE_Z was GATE_END+46; it is GATE_END+66 now, so the
+   corridor, the door, the lamp room and the end of the world were all being
+   drawn twenty metres early -- at 514 m the rock said corridor wall where
+   the game said open room, and the camera spawned inside it. Third time a
+   constant drifted between the two fields this session; a uniform cannot. */
+"uniform float uWakeZ;    // GATE_END + 66; CORR_Z is -20, LAMP_Z is +26\n"
 "uniform float uDoor;     // 1 once it is open\n"
 "uniform float uLampOut;  // 1 once the bulb has gone\n"
 "uniform int   uMonN;\n"
@@ -549,26 +556,28 @@ static const char *CAVE_FS =
 "  float cyh  = mix(c.y, uHospY, st2);\n"
 "  float boxm = roomsAir(p, cyh - 1.35);\n"
 "  float dep = -p.z;\n"
-"  if (dep > 526.0 - 20.0) {\n"
+/* The T at the end of the rooms, matching cave_sdf: a cross-corridor the
+   whole maze can reach, running into the one that goes to the door. */
+"  if (dep > uWakeZ - 23.0) {\n"
 "    float fl2 = cyh - 1.35;\n"
-/* funnelled, matching cave_sdf: wide where the rooms end, a corridor by the
-   time it reaches the door */
-"    float fq  = 1.0 - smoothstep(526.0 - 20.0, 526.0 - 11.0, dep);\n"
-"    float cor = min((1.9 + 58.0 * fq) - abs(p.x - uCorrX),\n"
-"                    1.55 - abs(p.y - fl2 - 1.30));\n"
-"    boxm = mix(boxm, cor, smoothstep(526.0 - 20.0, 526.0 - 15.0, dep));\n"
+"    float ch  = 1.55 - abs(p.y - fl2 - 1.30);\n"
+"    float cor = min(1.9 - abs(p.x - uCorrX), ch);\n"
+"    float lat = min(1.9 - abs(dep - (uWakeZ - 20.0)), ch);\n"
+"    boxm = max(boxm, lat);\n"
+"    boxm = max(boxm, cor);\n"
+"    boxm = mix(boxm, cor, smoothstep(uWakeZ - 17.0, uWakeZ - 11.0, dep));\n"
 "  }\n"
-"  if (dep > 526.0 + 1.2) {\n"
+"  if (dep > uWakeZ + 1.2) {\n"
 "    float fl3 = cyh - 1.35;\n"
 "    boxm = min(min(15.0 - abs(p.x - uCorrX),\n"
-"                   1.75 - abs(p.y - fl3 - 1.45)), (552.0 + 14.0) - dep);\n"
+"                   1.75 - abs(p.y - fl3 - 1.45)), (uWakeZ + 40.0) - dep);\n"
 "  }\n"
 "  m = mix(m, boxm, uRoom);\n"
 /* 526, matching WAKE_Z in cave_sdf. It said 525, so the end wall was drawn a
    metre nearer than the one you actually stop against. */
-"  if (uRoad < 0.5) m = min(m, p.z + (552.0 + 14.0));\n"
-"  if (dep > 525.6 && dep < 526.4) {\n"
-"    float leaf = abs(dep - 526.0) - 0.18;\n"
+"  if (uRoad < 0.5) m = min(m, p.z + (uWakeZ + 40.0));\n"
+"  if (dep > uWakeZ - 0.4 && dep < uWakeZ + 0.4) {\n"
+"    float leaf = abs(dep - uWakeZ) - 0.18;\n"
 "    float gx2  = 1.05 - abs(p.x - uCorrX);\n"
 "    float d3   = (uDoor > 0.5 && gx2 > 0.0) ? 1000.0 : leaf;\n"
 "    if (gx2 < 0.0) d3 = 1000.0;\n"
@@ -797,10 +806,25 @@ static const char *CAVE_FS =
 "                vec3(1.35, 1.33, 1.22) * plive,\n"
 "                smoothstep(1.10, 1.02, pe));\n"
 "    }\n"
+/* The corridor gets its own line of them, down its own axis, every four
+   metres. The room grid is on sevens and the corridor sits wherever the cave
+   left it, so the two need not line up at all -- and where they did not, the
+   last stretch of the game had no fitting over it anywhere and you walked to
+   the door in the dark. A line of lights running away from you is also the
+   plainest way there is of saying which direction the building goes. */
+"    if (-p.z > uWakeZ - 21.0) {\n"
+"      float lx = abs(p.x - uCorrX);\n"
+"      float lz = abs(mod(-p.z + 2.0, 4.0) - 2.0);\n"
+"      float le = max(lx / 0.62, lz / 0.80);\n"
+"      if (le < 1.14)\n"
+"        alb = mix(vec3(0.62, 0.61, 0.58),\n"
+"                  vec3(1.35, 1.33, 1.22) * plive,\n"
+"                  smoothstep(1.08, 1.00, le));\n"
+"    }\n"
 "  }\n"
 "\n"
 "  vec2 lc = centre(uCam.z - 20.0);\n"
-"  vec3 lp = vec3(lc.x, lc.y + 0.6, max(uCam.z - 20.0, -540.0));\n"
+"  vec3 lp = vec3(lc.x, lc.y + 0.6, max(uCam.z - 20.0, -(uWakeZ + 14.0)));\n"
 "  vec3 ld = normalize(lp - p);\n"
 /* Wrapped diffuse: rock in a cave is lit by everything the light has
    already touched, so the terminator softens instead of cutting to
@@ -835,11 +859,21 @@ static const char *CAVE_FS =
    sit low; on the beat the whole floor plan goes white for a moment,
    which is the only light you are given and the only thing the things
    in here are afraid of. */
-"    vec3 pan = vec3(1.00, 0.97, 0.86) * uRoom * (0.42 + 1.75 * uBlink);\n"
+/* A pulse, not a strobe. At 0.42 between beats and 2.17 on one the room was
+   going almost dark and back five times over, which is a fault in the wiring;
+   the fittings now sit at a readable level and swell on the beat. */
+"    vec3 pan = vec3(1.00, 0.97, 0.86) * uRoom * (0.78 + 0.95 * uBlink);\n"
 "    for (int px = 0; px < 2; px++)\n"
 "    for (int pz = 0; pz < 2; pz++) {\n"
 "      vec2 pcv = base + vec2(float(px), float(pz)) * 7.0;\n"
-"      vec3 plp = vec3(pcv.x, centre(pcv.y).y + 1.02, pcv.y);\n"
+/* Hung from the building's ceiling, not from the cave's axis. The rooms stopped
+   undulating and hold one height; these were still being placed off centre(z),
+   which wanders four metres up and down, so through much of the hospital the
+   fittings were buried in the floor or sat above the ceiling lighting nothing.
+   Same mistake as probing the maze against the tunnel centre. */
+"      float pcy = mix(centre(pcv.y).y, uHospY,\n"
+"                      smoothstep(244.0, 259.0, -pcv.y));\n"
+"      vec3 plp = vec3(pcv.x, pcy + 1.02, pcv.y);\n"
 "      vec3 pld = plp - p;\n"
 "      float pd2 = dot(pld, pld);\n"
 "      pld *= inversesqrt(max(pd2, 1e-4));\n"
@@ -861,6 +895,23 @@ static const char *CAVE_FS =
 "      col += alb * pan * pdif * att * 0.85 * plv * mix(ao, 1.0, 0.20);\n"
 "      col += pan * pw * att * 0.34 * plv;\n"
 "      col += pan * pg * att * 1.30 * plv * m_flr;\n"
+"    }\n"
+/* and the corridor's own line, lit the same way -- the two nearest of them */
+"    if (-p.z > uWakeZ - 21.0) {\n"
+"      float lzc = floor((-p.z + 2.0) / 4.0) * 4.0 - 2.0;\n"
+"      for (int q = 0; q <= 1; q++) {\n"
+"        float lz2 = lzc + float(q) * 4.0;\n"
+"        vec3  llp = vec3(uCorrX, uHospY + 1.02, -lz2);\n"
+"        vec3  lld = llp - p;\n"
+"        float ld2 = dot(lld, lld);\n"
+"        lld *= inversesqrt(max(ld2, 1e-4));\n"
+"        float lat2 = 1.0 / (1.0 + ld2 * 0.10);\n"
+"        vec3  hv3 = normalize(lld - rd);\n"
+"        col += alb * pan * max(dot(n, lld), 0.0) * lat2 * 0.85\n"
+"             * mix(ao, 1.0, 0.20);\n"
+"        col += pan * pow(max(dot(n, hv3), 0.0),  26.0) * lat2 * 0.34;\n"
+"        col += pan * pow(max(dot(n, hv3), 0.0), 170.0) * lat2 * 1.30 * m_flr;\n"
+"      }\n"
 "    }\n"
 "  }\n"
 /* The floor is polished, and the one thing that says so is the ceiling lying
@@ -902,11 +953,11 @@ static const char *CAVE_FS =
    than a bright patch painted on the ceiling: an inverse-square falloff
    from a point, a visible filament, the cord it hangs from, and a warm
    spill on the floor under it. When it goes, it goes - no fade. */
-"  if (-p.z > 527.0 && uLampOut < 0.5) {\n"
+"  if (-p.z > uWakeZ + 1.0 && uLampOut < 0.5) {\n"
 "    vec2  lcc = centre(p.z);\n"
 "    float lst = smoothstep(244.0, 259.0, -p.z);\n"
 "    float lcy = mix(lcc.y, uHospY, lst);\n"
-"    vec3  bp  = vec3(uCorrX, lcy + 0.62, -(552.0));\n"
+"    vec3  bp  = vec3(uCorrX, lcy + 0.62, -(uWakeZ + 26.0));\n"
 "    vec3  bd  = bp - p;\n"
 "    float bl2 = dot(bd, bd);\n"
 "    vec3  bn  = bd * inversesqrt(max(bl2, 1e-4));\n"
@@ -948,8 +999,8 @@ static const char *CAVE_FS =
 "    vec3  hv2 = normalize(ld2 + vv);\n"
 "    float spec = pow(max(dot(bn, hv2), 0.0), 48.0);\n"
 "    float rim  = pow(1.0 - max(dot(bn, vv), 0.0), 5.0);\n"
-"    col  = bc * (0.22 * amb + 1.25 * lam) * (0.6 + 1.5 * uBlink);\n"
-"    col += vec3(0.95, 0.92, 0.88) * spec * (0.55 + 1.4 * uBlink);\n"
+"    col  = bc * (0.22 * amb + 1.25 * lam) * (0.85 + 0.80 * uBlink);\n"
+"    col += vec3(0.95, 0.92, 0.88) * spec * (0.80 + 0.75 * uBlink);\n"
 "    col += vec3(0.40, 0.08, 0.06) * rim * 0.22;   // wet edge\n"
 "    col += vec3(0.9, 0.95, 1.0) * beastStun * 0.50;\n"
 "  }\n"

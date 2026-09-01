@@ -139,7 +139,7 @@ static GLint  u_vp, u_cam, u_time, u_monster, u_persist, u_flat, u_base, u_ink;
 static GLint  w_res, w_time, w_open, w_bright, w_sharp, w_lamp, w_lampb;
 static GLuint g_cave_prog;
 static GLint  c_res, c_cam, c_fwd, c_right, c_up, c_seed, c_wander,
-              c_rough, c_time, c_light, c_wet, c_room, c_road, c_white,
+              c_rough, c_time, c_light, c_wet, c_room, c_road, c_white, c_wakez,
               c_pulse, c_hospy, c_blink, c_corrx, c_dooru, c_lampout,
               c_monn, c_monp, c_mond, c_bra, c_brb;
 static GLint  u_fade, u_grey;
@@ -559,23 +559,43 @@ static float cave_sdf(float x, float y, float z)
             float cyh  = cy * (1.0f - st2) + g_hosp_y * st2;
             float hall = rooms_air(x, y, z, cyh - 1.35f);
             float dep  = -z;
-            if (dep > CORR_Z) {
-                /* the corridor: two walls, a floor, a ceiling, nothing else */
+            if (dep > CORR_Z - 3.0f) {
+                /* A T. One cross-corridor along the end of the rooms, which
+                 * every part of the maze can reach, running into one thin
+                 * corridor that goes to the door.
+                 *
+                 * The problem is that the building has no outer wall -- its
+                 * rooms run sideways for ever while the way out sits at one x
+                 * -- so a slot on that line is only reachable from the rooms
+                 * that happen to sit on it, and a quarter of seeds sealed the
+                 * ending off. The first answer was to make the corridor
+                 * funnel: a hundred metres wide where the rooms end. That
+                 * reaches everybody and tells them nothing. You came out of
+                 * the maze onto an open floor with no way to guess which way
+                 * the door was, which is worse than a wall -- a wall at least
+                 * says go somewhere else.
+                 *
+                 * A corridor across the end of it says the same thing a
+                 * hospital says: you are in a building, and buildings have
+                 * corridors, and corridors go somewhere. Walk it either way
+                 * and you meet the one that turns off toward the door. */
                 float fl2 = cyh - 1.35f;
-                /* It funnels. A 3.8 m slot on one fixed line, blended in over
-                 * five metres, is only reachable from the rooms that happen
-                 * to sit on that line -- and the building has no outer wall,
-                 * so the rooms run sideways for ever while the way out is at
-                 * one x. A quarter of the seeds sealed the ending off here
-                 * even after the walls were fixed. Wide where the rooms end
-                 * and narrowing to a corridor, so the maze opens out and hands
-                 * you the door instead of hiding it. */
-                float fq  = 1.0f - smoothstep01(CORR_Z, CORR_Z + 9.0f, dep);
-                float cw  = (1.9f + 58.0f * fq) - (float)fabs(x - g_corr_x);
                 float ch  = 1.55f - (float)fabs(y - fl2 - 1.30f);
+                float cw  = 1.9f - (float)fabs(x - g_corr_x);
                 float cor = cw < ch ? cw : ch;
-                float kk2 = smoothstep01(CORR_Z, CORR_Z + 5.0f, dep);
-                hall = hall * (1.0f - kk2) + cor * kk2;
+                float lz  = 1.9f - (float)fabs(dep - CORR_Z);
+                float lat = lz < ch ? lz : ch;
+                /* Unioned into the rooms, not blended with them. A lerp
+                 * between the maze and a slot on one line is what sealed the
+                 * ending: where the maze is open and the slot is not, the mix
+                 * of the two is a wall. */
+                if (lat > hall) hall = lat;
+                if (cor > hall) hall = cor;
+                {   /* and past the junction the rooms stop and it is corridor
+                     * the rest of the way */
+                    float kk2 = smoothstep01(CORR_Z + 3.0f, CORR_Z + 9.0f, dep);
+                    hall = hall * (1.0f - kk2) + cor * kk2;
+                }
             }
             if (dep > WAKE_Z + 1.2f) {
                 /* and past the door, the room with the lamp: wide, low, and
@@ -1726,6 +1746,9 @@ static void mat4_view(float *m, float px, float py, float pz,
 
 /* --- attempts and lives -------------------------------------------------- */
 
+/* defined further down, beside the rest of the building's geometry */
+static float hospital_eye_y(float z);
+
 static void respawn(float now)
 {
     int i;
@@ -1738,6 +1761,18 @@ static void respawn(float now)
      * third time is not a second chance, it is a punishment for having had
      * one -- so a death puts you back at the last threshold you crossed. */
     tunnel_centre(-g_check, &cx, &cy);
+    /* Inside the building the floor is one height, not the tunnel's. The axis
+     * it used to follow wanders four metres up and down, so a checkpoint past
+     * the second gate respawned the player inside the floor or above the
+     * ceiling -- fit came back at -0.41 at 514 m, and the search below only
+     * ever looks sideways, so nothing could recover it. Every death in the
+     * back half of the game landed there. hospital_eye_y is the same height
+     * game_probe measures against, so there is one answer to this and not two.
+     *
+     * Only where the building is: hospital_eye_y sits five centimetres below
+     * the axis, which is right for a flat floor and is a change the cave has
+     * no reason to wear -- a depth 20 capture stops matching over it. */
+    if (g_check > GATE_2 + 4.0f) cy = hospital_eye_y(-g_check);
     g_px = cx; g_py = cy; g_pz = -g_check;
     /* past the rooms there is only the corridor, and it does not run down
        the old tunnel axis - starting on that axis puts you in its wall */
@@ -2135,6 +2170,7 @@ void game_init(unsigned seed, float start_depth)
     c_hospy  = glGetUniformLocation(g_cave_prog, "uHospY");
     c_blink  = glGetUniformLocation(g_cave_prog, "uBlink");
     c_corrx  = glGetUniformLocation(g_cave_prog, "uCorrX");
+    c_wakez  = glGetUniformLocation(g_cave_prog, "uWakeZ");
     c_dooru  = glGetUniformLocation(g_cave_prog, "uDoor");
     c_lampout= glGetUniformLocation(g_cave_prog, "uLampOut");
     c_monn   = glGetUniformLocation(g_cave_prog, "uMonN");
@@ -2491,6 +2527,7 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
             glUniform1f(c_hospy, g_hosp_y);
             glUniform1f(c_blink, g_blink);
             glUniform1f(c_corrx, g_corr_x);
+            glUniform1f(c_wakez, WAKE_Z);
             glUniform1f(c_dooru, g_door_open);
             glUniform3fv(c_bra, 16, bra);
             glUniform3fv(c_brb, 16, brb);
@@ -2840,15 +2877,28 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
             g_beat -= 1.0f;
             if (g_stage >= 3) {
                 int mi;
-                g_blink = 1.0f;
                 audio_beat();
                 for (mi = 0; mi < g_mon_count; mi++)
                     if (g_mon[mi].state == MON_CHARGING || g_mon[mi].state == MON_BURST)
                         g_mon[mi].stun = 0.55f;
             }
         }
-        g_blink -= dt * 5.5f;
-        if (g_blink < 0.0f) g_blink = 0.0f;
+        /* The shape of one beat, taken from the phase rather than snapped on
+         * and decayed off. It used to jump to 1 the instant the beat landed
+         * and fall in a straight line to nothing in a sixth of a second: at
+         * one a second that is a strobe, and it read as a fault in the tube
+         * rather than as something alive. A heart is two sounds, the second
+         * softer and close behind the first, and neither of them is a step --
+         * so this is two smooth swells, lub and dub, and the room breathes
+         * instead of stuttering. */
+        if (g_stage >= 3) {
+            float ph = g_beat;
+            float d1 = (ph - 0.10f) / 0.085f;
+            float d2 = (ph - 0.32f) / 0.060f;
+            g_blink = (float)exp(-d1 * d1) + 0.42f * (float)exp(-d2 * d2);
+        } else {
+            g_blink = 0.0f;
+        }
     }
     if (g_note_t > 0.0f) g_note_t -= dt;
     g_pulse -= dt * 1.7f; if (g_pulse < 0.0f) g_pulse = 0.0f;
@@ -3064,8 +3114,8 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
             glUniform1f(c_hospy, g_hosp_y);
             glUniform1f(c_blink, g_blink);
             glUniform1f(c_corrx, g_corr_x);
+            glUniform1f(c_wakez, WAKE_Z);
             glUniform1f(c_dooru, g_door_open);
-            glUniform1f(c_lampout, g_lamp_out);
             glUniform1f(c_lampout, g_lamp_out);
             {   /* Indoors the things are geometry, not returns: the shader
                  * marches them alongside the walls so the same lights land
