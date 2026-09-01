@@ -136,6 +136,7 @@ static int    g_wcount;
 static GLuint g_vao, g_vbo, g_wvao, g_wvbo, g_mvao, g_mvbo, g_hvao, g_hvbo,
               g_prog, g_wake_prog, g_wvao_full;
 static GLint  u_vp, u_cam, u_time, u_monster, u_persist, u_flat, u_base, u_ink;
+static GLint  w_run;
 static GLint  w_res, w_time, w_open, w_bright, w_sharp, w_lamp, w_lampb;
 static GLuint g_cave_prog;
 static GLint  c_res, c_cam, c_fwd, c_right, c_up, c_seed, c_wander,
@@ -1360,6 +1361,7 @@ static const Ward WARD[] = {
 static int   g_ward_n;      /* how many have come, so none comes twice */
 static float g_hosp_t;      /* seconds spent inside the building */
 static float g_hum_t;       /* the fixtures, kept from ever going quiet */
+static float g_mon_beep;    /* the bedside monitor, once a beat */
 static int   g_days;        /* fifteen at its door, and climbing */
 
 static unsigned g_heard;      /* which ones this attempt has brought back */
@@ -2187,6 +2189,7 @@ void game_init(unsigned seed, float start_depth)
     w_sharp  = glGetUniformLocation(g_wake_prog, "uSharp");
     w_lamp   = glGetUniformLocation(g_wake_prog, "uLamp");
     w_lampb  = glGetUniformLocation(g_wake_prog, "uLampB");
+    w_run    = glGetUniformLocation(g_wake_prog, "uRun");
     glGenVertexArrays(1, &g_wvao_full);
 
     g_cave_prog = gfx_build_program(WAKE_VS, CAVE_FS);   /* same fullscreen tri */
@@ -2592,7 +2595,11 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
         float lampb  = 1.0f - smoothstep01(0.150f, 0.205f, w); /* its bulb dying */
         float room   = smoothstep01(0.30f, 0.52f, w);
         float open   = smoothstep01(0.36f, 0.72f, w);          /* the eye */
-        float bright = smoothstep01(0.60f, 1.00f, w);          /* the light */
+        /* In, and then out again. Held at full this stayed a white wash over
+         * everything for as long as the screen was up, so the room the whole
+         * game is walking toward was never actually seen. */
+        float bright = smoothstep01(0.60f, 1.00f, w)
+                     * (1.0f - 0.82f * smoothstep01(1.06f, 1.60f, w));
         float sharp  = smoothstep01(0.46f, 0.94f, w);
         char line[48];
 
@@ -2600,6 +2607,14 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
          * so nothing moves any more -- but the overflow is a clock the last
          * screen can be paced by, and the last screen is where the game
          * finally says what it has been counting. */
+        /* The monitor, once a beat, in step with the trace on its screen:
+         * the sweep runs at 0.34 and carries two beats across, so a beat is
+         * every 1.47 seconds. It is the first sound of the room, and it
+         * starts before the eye is open. */
+        if (room > 0.004f) {
+            g_mon_beep -= dt;
+            if (g_mon_beep <= 0.0f) { audio_monitor(); g_mon_beep = 1.4706f; }
+        }
         g_wake += dt * 0.082f;
 
         glClearColor(0.01f, 0.012f, 0.018f, 1.0f);
@@ -2614,6 +2629,14 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
             glUniform1f(w_open, open);
             glUniform1f(w_bright, bright);
             glUniform1f(w_sharp, sharp);
+            {   /* He is already on his way when the eye opens -- the room
+                 * reacted before you did, which is the whole point of it. */
+                /* He has to arrive while the eye is open, or the only
+                 * thing that moves in the ending happens behind an eyelid.
+                 * The eye opens over 0.36..0.72; he comes in behind it. */
+                float run = smoothstep01(0.58f, 1.16f, w);
+                glUniform1f(w_run, run);
+            }
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
             glBindVertexArray(g_wvao_full);
             glDrawArrays(GL_TRIANGLES, 0, 3);

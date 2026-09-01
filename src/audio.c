@@ -26,7 +26,7 @@
 #define AP_LEN       1051
 
 enum { V_PING, V_ROAR, V_ROAR_HI, V_ROAR_LO, V_HIT, V_BEEP, V_SPLASH, V_FLAT, V_HUM,
-       V_STROKE, V_DEFIB, V_STEP, V_BEAT, V_DOOR, V_LAMPOUT };
+       V_STROKE, V_DEFIB, V_STEP, V_BEAT, V_DOOR, V_LAMPOUT, V_MONITOR };
 
 typedef struct {
     int   active;
@@ -121,6 +121,13 @@ static float voice_sample(Voice *v)
            + (float)sin(6.2831853 * 2400.0 * v->t) * (float)exp(-x * 13.0) * 0.22f
            + (float)sin(6.2831853 * 62.0 * v->t) * (float)exp(-x * 9.0) * 0.35f) * 0.30f;
         s = dry * (1.0f - 0.35f * w) + wet * w;
+    } else if (v->kind == V_MONITOR) {
+        /* The one sound everybody knows means somebody is still alive. Two
+         * partials and a hard little envelope -- a small speaker in a plastic
+         * case, not a musical instrument. */
+        float env = (float)exp(-x * 9.0) * (x < 0.04f ? x / 0.04f : 1.0f);
+        s = ((float)sin(6.2831853 * 1046.0 * v->t) * 0.7f
+           + (float)sin(6.2831853 * 2092.0 * v->t) * 0.18f) * env * 0.16f;
     } else if (v->kind == V_DOOR) {
         /* the latch, then the weight of it swinging */
         float cl = frand() * (float)exp(-x * 40.0) * 0.8f;
@@ -319,6 +326,7 @@ void audio_defib(void)  { voice_start(V_DEFIB, 2.60f); }
 void audio_beat(void)   { voice_start(V_BEAT, 0.45f); }
 void audio_door(void)   { voice_start(V_DOOR, 1.30f); }
 void audio_lampout(void){ voice_start(V_LAMPOUT, 0.55f); }
+void audio_monitor(void){ voice_start(V_MONITOR, 0.20f); }
 /* wet is 0 for a dry shoe and 1 straight out of the water */
 void audio_step(float wet)
 { voice_startp(V_STEP, 0.16f + 0.26f * wet, wet); }

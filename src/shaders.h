@@ -122,6 +122,7 @@ static const char *WAKE_FS =
 "uniform float uSharp;   // how much of it is holding still\n"
 "uniform float uLamp;    // 1: the room before the room\n"
 "uniform float uLampB;   // its bulb, until it is put out\n"
+"uniform float uRun;     // the doctor, 0 at the door and 1 at the bedside\n"
 "\n"
 "float h21(vec2 q){ uvec2 u = floatBitsToUint(q);\n"
 "  uint h = u.x * 0x2c1b3c6du ^ u.y * 0x297a2d39u;\n"
@@ -132,6 +133,16 @@ static const char *WAKE_FS =
 "  return mix(mix(h21(i), h21(i+vec2(1,0)), u.x),\n"
 "             mix(h21(i+vec2(0,1)), h21(i+vec2(1,1)), u.x), u.y); }\n"
 "\n"
+/* One beat of a sinus rhythm, over 0..1. The whole reason the room reads as
+   an intensive care unit rather than as a bedroom is this shape: everybody
+   knows it, nobody has to be told what it means, and it is the one thing on
+   screen that says the body you are in is working. */
+"float ecg(float x){\n"
+"  return  0.16*exp(-pow((x-0.14)/0.038, 2.0))\n"
+"        - 0.16*exp(-pow((x-0.30)/0.013, 2.0))\n"
+"        + 1.00*exp(-pow((x-0.345)/0.012, 2.0))\n"
+"        - 0.34*exp(-pow((x-0.395)/0.017, 2.0))\n"
+"        + 0.30*exp(-pow((x-0.60)/0.060, 2.0)); }\n"
 "float box(vec3 p, vec3 b){ vec3 q = abs(p) - b;\n"
 "  return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0); }\n"
 "float cyl(vec3 p, float r, float h){\n"
@@ -172,7 +183,7 @@ static const char *WAKE_FS =
 "  float stand = cyl(p - vec3(2.30, 1.10, -1.85), 0.030, 1.10);\n"
 "  stand = min(stand, box(p - vec3(2.30, 2.06, -1.85), vec3(0.06, 0.14, 0.03)));\n"
 "  if (stand < d) { d = stand; id = 4.0; }\n"
-"  float fig = person(p - vec3(1.42, 0.00, -0.95));\n"
+"  float fig = person(p - vec3(-1.52, 0.00, -1.05));\n"
 "  if (fig < d) { d = fig; id = 5.0; }\n"
 "  // the bed you are lying in: a blanket rising into the bottom of the view\n"
 "  vec3 bp = p - vec3(0.0, 0.72, 0.85);\n"
@@ -180,6 +191,23 @@ static const char *WAKE_FS =
 "  if (blank < d) { d = blank; id = 6.0; }\n"
 "  float door = box(p - vec3(1.30, 1.05, 4.16), vec3(0.55, 1.05, 0.05));\n"
 "  if (door < d) { d = door; id = 7.0; }\n"
+/* The monitor, on its pole at the head of the bed. */
+"  vec3 mo = p - vec3(1.62, 1.60, -1.25);\n"
+"  float mbody = box(mo, vec3(0.31, 0.24, 0.075));\n"
+"  if (mbody < d) { d = mbody; id = 8.0; }\n"
+"  float mscr  = box(mo - vec3(0.0, 0.025, 0.080), vec3(0.265, 0.180, 0.006));\n"
+"  if (mscr < d) { d = mscr; id = 9.0; }\n"
+"  float mpole = cyl(p - vec3(1.62, 0.78, -1.25), 0.026, 0.80);\n"
+"  if (mpole < d) { d = mpole; id = 4.0; }\n"
+/* and somebody coming, which is the other half of waking up in one of these:
+   the room notices. He starts at the door and ends at the rail. */
+/* and he is running, so he bounces -- flat translation across the floor is
+   a chess piece being slid. It dies out as he arrives and stops. */
+"  float rbob = sin(uTime * 10.5) * 0.22 * uRun * (1.0 - uRun);\n"
+"  vec3 dp = p - vec3(mix(1.42, 0.98, uRun), rbob,\n"
+"                     mix(3.85, -0.62, uRun));\n"
+"  float doc = person(dp);\n"
+"  if (doc < d) { d = doc; id = 10.0; }\n"
 "  return d; }\n"
 "\n"
 "vec3 nrm(vec3 p){ float i; vec2 e = vec2(0.0015, 0.0);\n"
@@ -225,7 +253,10 @@ static const char *WAKE_FS =
 "  if (id < 4.5) return vec3(0.55, 0.57, 0.60);\n"
 "  if (id < 5.5) return vec3(0.22, 0.26, 0.34);   // scrubs blue, dark\n"
 "  if (id < 6.5) return vec3(0.72, 0.78, 0.82);   // the blanket\n"
-"  return vec3(0.42, 0.33, 0.24);                 // the door\n"
+"  if (id < 7.5) return vec3(0.42, 0.33, 0.24);   // the door\n"
+"  if (id < 8.5) return vec3(0.14, 0.15, 0.17);   // the monitor case\n"
+"  if (id < 9.5) return vec3(0.02, 0.03, 0.03);   // its screen, off\n"
+"  return vec3(0.86, 0.88, 0.90);                 // the coat\n"
 "}\n"
 "\n"
 "void main(){\n"
@@ -264,7 +295,7 @@ static const char *WAKE_FS =
 "    lc *= 1.0 - 0.28 * dot(uv, uv);\n"
 "    FragColor = vec4(clamp(lc, 0.0, 1.0), 1.0); return;\n"
 "  }\n"
-"  float lid  = uOpen * 0.62 * (1.0 - 0.55 * uv.x * uv.x);\n"
+"  float lid  = uOpen * 0.78 * (1.0 - 0.48 * uv.x * uv.x);\n"
 "  float lash = smoothstep(lid, lid - 0.05, abs(uv.y + 0.02));\n"
 "  if (lash <= 0.001) { FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }\n"
 "\n"
@@ -282,7 +313,32 @@ static const char *WAKE_FS =
 "    vec3 alb = albedo(id, p, n);\n"
 "    float occ = ao(p, n);\n"
 "\n"
-"    if (id > 1.5 && id < 3.5) {\n"
+"    if (id > 8.5 && id < 9.5) {\n"
+/* The screen. A trace scrolling right to left with the cursor eating the
+   old sweep ahead of it, the way every one of these has looked since the
+   sixties -- and under it the two numbers anybody recognises. */
+"      float su = (p.x - 1.62) / 0.265;\n"
+"      float sv = (p.y - 1.625) / 0.180;\n"
+"      float sweep = fract(uTime * 0.34);\n"
+"      float sx    = (su * 0.5 + 0.5);\n"
+"      float age   = fract(sx - sweep + 1.0);\n"
+"      float w     = ecg(fract((sx - sweep) * 2.0 + 1.0)) * 0.46 + 0.24;\n"
+"      float line  = smoothstep(0.075, 0.018, abs(sv - w));\n"
+"      line *= smoothstep(0.02, 0.10, age) * smoothstep(1.0, 0.72, age);\n"
+"      col = vec3(0.02, 0.05, 0.04);\n"
+"      col += vec3(0.16, 1.70, 0.55) * line;\n"
+/* a second trace below it, slower and blue -- the breathing one */
+"      float w2 = sin((sx - sweep * 0.6) * 12.0) * 0.10 - 0.52;\n"
+"      col += vec3(0.20, 0.55, 1.60)\n"
+"           * smoothstep(0.050, 0.014, abs(sv - w2)) * 0.55;\n"
+/* and the numbers, as blocks: nobody has to read them to know what they are */
+"      if (su > 0.52 && su < 0.94) {\n"
+"        float ny = sv * 3.0;\n"
+"        float dg = step(0.55, fract(su * 7.0)) * step(0.35, fract(ny + 0.5));\n"
+"        if (sv >  0.28 && sv <  0.72) col += vec3(0.16, 1.70, 0.55) * dg * 0.9;\n"
+"        if (sv > -0.40 && sv < -0.02) col += vec3(0.20, 0.55, 1.60) * dg * 0.7;\n"
+"      }\n"
+"    } else if (id > 1.5 && id < 3.5) {\n"
 "      // the two emitters, seen directly: panel cool, window warm daylight\n"
 "      col = (id < 2.5) ? vec3(1.15, 1.14, 1.10)\n"
 "                       : vec3(1.35, 1.22, 0.95) * (0.85 + 0.3*uv.y);\n"
@@ -306,7 +362,7 @@ static const char *WAKE_FS =
 "                  / (1.0 + pdist*pdist*0.10);\n"
 "      // sky fill so shadow cores stay alive\n"
 "      vec3 fill = vec3(0.30, 0.33, 0.38) * (0.5 + 0.5*n.y);\n"
-"      col = alb * (sun + ceil_l * 0.9 + fill * 0.35) * occ;\n"
+"      col = alb * (sun + ceil_l * 1.75 + fill * 0.55) * occ;\n"
 "      // vinyl gloss: one bounce toward whatever is bright\n"
 "      if (id < 1.5 && n.y > 0.9 && p.y < 0.2) {\n"
 "        vec3 rr = reflect(rd, n); float rid;\n"
@@ -319,10 +375,14 @@ static const char *WAKE_FS =
 "\n"
 "  // the grade: exposure, a filmic knee, grain, vignette, and the wash of\n"
 "  // waking - unfocused first, then white as the light arrives\n"
-"  col *= 1.15;\n"
-"  col = mix(col, vec3(dot(col, vec3(0.333))), (1.0 - uSharp) * 0.6);\n"
+"  col *= 1.55;\n"
+"  col = mix(col, vec3(dot(col, vec3(0.333))), (1.0 - uSharp) * 0.55);\n"
 "  col += (1.0 - uSharp) * 0.24 * vec3(0.9, 0.94, 1.0);\n"
-"  col = mix(col, vec3(1.0), uBright * 0.45);\n"
+/* uBright arrives as a flood and then lets go. Held at full it never stopped
+   being a white wash, so the last thing the game shows -- the room, the
+   monitor, the person who came running -- stayed behind a fog it had no
+   reason to be behind. It comes in, and then the room is simply there. */
+"  col = mix(col, vec3(1.0), uBright * 0.50);\n"
 "  col = (col * (2.51*col + 0.03)) / (col * (2.43*col + 0.59) + 0.14);\n"
 "  col += (h21(gl_FragCoord.xy + uTime) - 0.5) * 0.035;\n"
 "  col *= 1.0 - 0.30 * dot(uv, uv);\n"
@@ -809,9 +869,17 @@ static const char *CAVE_FS =
 /* the diffuser sits in a frame, so the fitting has an edge rather than
    fading into the tile it is set into */
 "    float pe = max(pm.x, pm.y);\n"
+/* A fitting, not a glowing rectangle. What makes a ceiling light read as a
+   light is that you can see the tubes through the diffuser: two bright bars
+   with the panel darker between and around them, inside a frame. Flat, it was
+   a hole in the ceiling with light behind it. */
 "    if (pe < 1.16) {\n"
+"      vec2  pd   = mod(p.xz, 7.0) - 3.5;\n"
+"      float tube = smoothstep(0.17, 0.09, abs(abs(pd.x) - 0.40));\n"
+"      float ends = smoothstep(1.02, 0.90, abs(pd.y));\n"
 "      alb = mix(vec3(0.62, 0.61, 0.58),\n"
-"                vec3(1.35, 1.33, 1.22) * plive,\n"
+"                vec3(1.35, 1.33, 1.22) * plive\n"
+"                  * (0.42 + 0.85 * tube * ends),\n"
 "                smoothstep(1.10, 1.02, pe));\n"
 "    }\n"
 /* The corridor gets its own line of them, down its own axis, every four
@@ -824,10 +892,13 @@ static const char *CAVE_FS =
 "      float lx = abs(p.x - uCorrX);\n"
 "      float lz = abs(mod(-p.z + 2.0, 4.0) - 2.0);\n"
 "      float le = max(lx / 0.62, lz / 0.80);\n"
-"      if (le < 1.14)\n"
+"      if (le < 1.14) {\n"
+/* the corridor's are single-tube battens, which is what a corridor gets */
+"        float lt = smoothstep(0.20, 0.10, lx);\n"
 "        alb = mix(vec3(0.62, 0.61, 0.58),\n"
-"                  vec3(1.35, 1.33, 1.22) * plive,\n"
+"                  vec3(1.35, 1.33, 1.22) * plive * (0.40 + 0.90 * lt),\n"
 "                  smoothstep(1.08, 1.00, le));\n"
+"      }\n"
 "    }\n"
 "  }\n"
 "\n"
