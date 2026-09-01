@@ -950,6 +950,64 @@ static const char *CAVE_FS =
    what a cave painted beige looks like, which is what this was. This one
    does not fade with distance -- it is the wall's colour, not a detail on
    it, and it is most of what makes the place read as built. */
+/* CL-3: the same building, twenty years later, and not much longer.
+ *
+ * Yellowing on its own is just a colour grade -- it reads as a filter, not as
+ * a place. What makes a derelict ward look derelict is that you can see the
+ * building failing in a particular order: water gets in at the ceiling and
+ * comes down the wall, the paint lets go where the water ran, the plaster
+ * cracks along its own stress lines, and the ceiling tiles are the first
+ * thing to actually fall out because they are only resting in a grid.
+ *
+ * All of it read off the wall's own coordinates, so it costs no data, and all
+ * of it behind uProto so the shipped building is untouched. */
+"    if (uProto == 8) {\n"
+"      float dirt = grain(p * 1.1);\n"
+"      alb *= vec3(1.08, 0.96, 0.71);\n"
+"      alb *= 0.88 + 0.20 * dirt;\n"
+/* Where the building has actually failed, and where it merely looks old.
+   Everything below is multiplied by this, because damage everywhere is not
+   damage -- it is a texture, and the first pass came back looking like the
+   whole ward had been carved out of granite. A building falls down in
+   patches, and the patches are what the eye reads. */
+"      float dmg = smoothstep(0.50, 0.72, grain(p * 0.26));\n"
+/* water gets in at the ceiling first and comes down the wall in columns */
+"      float cn  = grain(vec3(p.x * 2.7, 0.0, p.z * 2.7));\n"
+"      float run = smoothstep(0.66, 0.92, cn) * smoothstep(1.20, -0.55, wy);\n"
+"      alb = mix(alb, vec3(0.26, 0.19, 0.10), upr * run * 0.70);\n"
+/* the paint lets go where the water ran, and grey render shows under it */
+"      float peel = smoothstep(0.58, 0.66, grain(p * 2.4)) * dmg;\n"
+"      alb = mix(alb, vec3(0.40, 0.39, 0.36), upr * peel * 0.85);\n"
+/* and then it cracks, along its own lines, wider low down where the wall is
+   carrying the load. Two sets, both thin, both only inside the patches. */
+"      float c1  = grain(p * 1.35);\n"
+"      float c2  = grain(p * 3.3 + 7.0);\n"
+"      float wid = 0.008 + 0.007 * smoothstep(0.6, -1.5, wy);\n"
+"      float ck  = smoothstep(wid, 0.0008, abs(c1 - 0.5));\n"
+"      ck = max(ck, smoothstep(wid * 0.6, 0.0005, abs(c2 - 0.5)) * 0.8);\n"
+"      alb = mix(alb, vec3(0.085, 0.078, 0.070), upr * ck * dmg * 0.95);\n"
+/* The ceiling tiles are the first thing to actually fall, because they are
+   only resting in a grid. What is behind them is not another surface. */
+"      float gx = floor((p.x + 0.3) / 0.6), gz = floor((p.z + 0.3) / 0.6);\n"
+"      float gone = step(0.78, h1(gx * 31.7 + gz * 7.13 + 3.0));\n"
+"      alb = mix(alb, vec3(0.035, 0.035, 0.040), m_cei * gone * 0.94);\n"
+/* and there is a building above the ceiling. A void with nothing in it is a
+   black rectangle; a void with one dull pipe crossing it is a hole. */
+"      float pip = smoothstep(0.052, 0.030, abs(fract(p.x * 0.9 + 0.35) - 0.5) * 1.1)\n"
+"                + smoothstep(0.044, 0.024, abs(fract(p.z * 1.3 + 0.2) - 0.5) * 1.1);\n"
+"      alb = mix(alb, vec3(0.20, 0.19, 0.17),\n"
+"                m_cei * gone * clamp(pip, 0.0, 1.0) * 0.85);\n"
+/* a few places where the render has come off the wall entirely, not flaked */
+"      float loss = smoothstep(0.70, 0.78, grain(p * 0.62));\n"
+"      alb = mix(alb, vec3(0.30, 0.28, 0.25), upr * loss * 0.80);\n"
+/* mould where the wall meets anything, which is where it always starts */
+"      float mould = smoothstep(-1.34, -1.74, wy) + smoothstep(1.10, 1.46, wy);\n"
+"      alb = mix(alb, vec3(0.11, 0.13, 0.09),\n"
+"                upr * clamp(mould, 0.0, 1.0) * (0.30 + 0.45 * dirt) * 0.62);\n"
+/* and the floor is only dirty -- vinyl does not crack, it lifts and stains */
+"      alb = mix(alb, vec3(0.33, 0.30, 0.22),\n"
+"                m_flr * smoothstep(0.55, 0.80, grain(p * 0.9)) * 0.42);\n"
+"    }\n"
 "    float dado = smoothstep(-0.88, -0.74, wy);\n"
 "    alb *= mix(1.0, mix(0.70, 1.10, dado), upr * uRoom);\n"
 "    if (uProto == 4)\n"
@@ -994,11 +1052,6 @@ static const char *CAVE_FS =
 "    alb = mix(alb, alb * 0.42, smoothstep(1.00, 0.93, ce));\n"
 "    alb = mix(alb, alb * 1.35, smoothstep(0.90, 0.99, ce) * smoothstep(1.14, 1.03, ce));\n"
 "    alb = mix(alb, alb * 2.10, smoothstep(0.50, 0.42, max(cd.x / 0.17, cd.y / 0.36)));\n"
-"  }\n"
-"  if (uProto == 8 && uRoom > 0.3) {\n"
-/* CL-3: the same building, twenty years older */
-"    alb *= vec3(1.06, 0.97, 0.74);\n"
-"    alb *= 0.86 + 0.22 * grain(p * 1.1);\n"
 "  }\n"
 "  float plive = 1.0;\n"
 "  if (uRoom > 0.15) {\n"
