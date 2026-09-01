@@ -166,7 +166,9 @@ static const char *WAKE_FS =
 "  d = smin(d, cap(p, vec3( 0.21,1.00,0.0), vec3( 0.20,0.48,0.30), 0.058), 0.05);\n"
 "  return d; }\n"
 "\n"
-"// id: 1 wall  2 panel  3 window  4 metal  5 person  6 blanket  7 doorleaf\n"
+"// 1 room  2 panel  3 window  4 metal  5 visitor  6 bedding  7 door\n"
+"// 8 monitor case  9 screen  10 coat  11 skin  12 lead  13 fluid bag\n"
+"// 14 curtain  15 scrubs  16 headwall\n"
 "float scene(vec3 p, out float id){\n"
 "  float d = -box(p - vec3(0.0, 1.30, 0.0), vec3(3.30, 1.55, 4.20));\n"
 "  id = 1.0;\n"
@@ -177,21 +179,67 @@ static const char *WAKE_FS =
 "  float frame = box(p - vec3(-3.26, 1.55, -1.40), vec3(0.045, 0.76, 1.24));\n"
 "  frame = max(frame, -win + 0.02);\n"
 "  if (frame < d) { d = frame; id = 4.0; }\n"
+/* The headwall. Every one of these rooms has one behind the bed: a long
+   white trunking full of outlets and gas ports, and it is the thing that
+   says ward rather than bedroom more plainly than anything except the
+   monitor. It sits on the right wall where the eye can reach it. */
+"  float hw = box(p - vec3(3.24, 1.42, 0.10), vec3(0.07, 0.30, 1.30));\n"
+"  if (hw < d) { d = hw; id = 16.0; }\n"
 "  float rail = min(cyl(p - vec3(0.92, 0.66, -0.30), 0.040, 1.20),\n"
 "                   cyl(vec3(p.x, p.z, p.y) - vec3(0.92, -0.30, 0.66), 0.040, 0.34));\n"
 "  if (rail < d) { d = rail; id = 4.0; }\n"
-"  float stand = cyl(p - vec3(2.30, 1.10, -1.85), 0.030, 1.10);\n"
-"  stand = min(stand, box(p - vec3(2.30, 2.06, -1.85), vec3(0.06, 0.14, 0.03)));\n"
+/* A curtain, hung off a track: the partition every bay has, and the only
+   large soft thing in a room made of hard ones. */
+"  float trk = cyl(vec3(p.y, p.x, p.z) - vec3(2.62, -2.05, -0.60), 0.022, 1.45);\n"
+"  if (trk < d) { d = trk; id = 4.0; }\n"
+"  float curt = box(p - vec3(-2.05, 1.72, -0.60),\n"
+"                   vec3(0.035 + 0.020*sin(p.z*7.0 + p.y*1.3), 0.90, 1.42));\n"
+"  if (curt < d) { d = curt; id = 14.0; }\n"
+/* The drip stand, with two bags on it and a line running down off them. */
+"  float stand = cyl(p - vec3(2.05, 1.05, -1.15), 0.026, 1.05);\n"
+"  stand = min(stand, cyl(p - vec3(2.05, 2.12, -1.15), 0.030, 0.03));\n"
+"  stand = min(stand, box(p - vec3(2.05, 2.10, -1.15), vec3(0.16, 0.020, 0.020)));\n"
 "  if (stand < d) { d = stand; id = 4.0; }\n"
+"  float bag1 = box(p - vec3(1.92, 1.86, -1.15), vec3(0.075, 0.155, 0.035));\n"
+"  float bag2 = box(p - vec3(2.18, 1.90, -1.15), vec3(0.060, 0.125, 0.030));\n"
+"  float bags = min(bag1, bag2);\n"
+"  if (bags < d) { d = bags; id = 13.0; }\n"
+/* the line off the bag, down to the back of a hand */
+"  float ivl = cap(p, vec3(1.92, 1.70, -1.15), vec3(1.05, 1.16, -0.30), 0.011);\n"
+"  ivl = min(ivl, cap(p, vec3(1.05, 1.16, -0.30), vec3(0.45, 0.78, 0.30), 0.011));\n"
+"  if (ivl < d) { d = ivl; id = 12.0; }\n"
 "  float fig = person(p - vec3(-1.52, 0.00, -1.05));\n"
 "  if (fig < d) { d = fig; id = 5.0; }\n"
-"  // the bed you are lying in: a blanket rising into the bottom of the view\n"
-"  vec3 bp = p - vec3(0.0, 0.72, 0.85);\n"
-"  float blank = box(bp, vec3(0.52, 0.16 + 0.05*sin(p.x*6.0), 0.85));\n"
+/* --- and the body this is all attached to ---------------------------------
+   You are in the bed, so the bed is not scenery in front of you: it is your
+   own chest under a blanket, your arms lying on top of it, the back of your
+   hand with a cannula taped to it, and the leads coming off you. Nothing
+   else says woken up in one of these anything like as well, and a first
+   person ending that does not show it is a camera in an empty room. */
+"  vec3 bp = p - vec3(0.0, 0.56, 0.00);\n"
+"  float blank = box(bp, vec3(0.60, 0.18 + 0.050*sin(p.x*5.0), 1.26));\n"
 "  if (blank < d) { d = blank; id = 6.0; }\n"
+/* the chest, above the blanket, in a gown */
+"  float chest = smin(cap(p, vec3(0.0, 0.80, 1.12), vec3(0.0, 0.83, 0.56), 0.200),\n"
+"                     cap(p, vec3(0.0, 0.83, 0.56), vec3(0.0, 0.79, 0.16), 0.185), 0.09);\n"
+"  if (chest < d) { d = chest; id = 15.0; }\n"
+/* two arms out along the blanket, and the hands at the end of them */
+"  float arms = cap(p, vec3(-0.31, 0.79, 1.06), vec3(-0.41, 0.75, 0.34), 0.064);\n"
+"  arms = min(arms, cap(p, vec3(0.31, 0.79, 1.06), vec3(0.43, 0.76, 0.34), 0.064));\n"
+"  arms = smin(arms, length(p - vec3(-0.43, 0.75, 0.27)) - 0.077, 0.04);\n"
+"  arms = smin(arms, length(p - vec3( 0.45, 0.76, 0.27)) - 0.077, 0.04);\n"
+"  if (arms < d) { d = arms; id = 11.0; }\n"
+/* three leads off the chest, up to the monitor, hanging as they go */
+"  vec3 mhub = vec3(1.44, 1.42, -1.05);\n"
+"  float lead = cap(p, vec3(-0.12, 0.95, 0.92), vec3(0.60, 0.80, 0.22), 0.016);\n"
+"  lead = min(lead, cap(p, vec3(0.60, 0.80, 0.22), mhub, 0.016));\n"
+"  lead = min(lead, cap(p, vec3(0.05, 0.98, 0.84), vec3(0.69, 0.86, 0.14), 0.016));\n"
+"  lead = min(lead, cap(p, vec3(0.69, 0.86, 0.14), mhub, 0.016));\n"
+"  lead = min(lead, cap(p, vec3(0.19, 0.94, 0.98), vec3(0.77, 0.92, 0.24), 0.016));\n"
+"  lead = min(lead, cap(p, vec3(0.77, 0.92, 0.24), mhub, 0.016));\n"
+"  if (lead < d) { d = lead; id = 12.0; }\n"
 "  float door = box(p - vec3(1.30, 1.05, 4.16), vec3(0.55, 1.05, 0.05));\n"
 "  if (door < d) { d = door; id = 7.0; }\n"
-/* The monitor, on its pole at the head of the bed. */
 "  vec3 mo = p - vec3(1.62, 1.60, -1.25);\n"
 "  float mbody = box(mo, vec3(0.31, 0.24, 0.075));\n"
 "  if (mbody < d) { d = mbody; id = 8.0; }\n"
@@ -199,13 +247,9 @@ static const char *WAKE_FS =
 "  if (mscr < d) { d = mscr; id = 9.0; }\n"
 "  float mpole = cyl(p - vec3(1.62, 0.78, -1.25), 0.026, 0.80);\n"
 "  if (mpole < d) { d = mpole; id = 4.0; }\n"
-/* and somebody coming, which is the other half of waking up in one of these:
-   the room notices. He starts at the door and ends at the rail. */
-/* and he is running, so he bounces -- flat translation across the floor is
-   a chess piece being slid. It dies out as he arrives and stops. */
 "  float rbob = sin(uTime * 10.5) * 0.22 * uRun * (1.0 - uRun);\n"
-"  vec3 dp = p - vec3(mix(1.42, 0.98, uRun), rbob,\n"
-"                     mix(3.85, -0.62, uRun));\n"
+"  vec3 dp = p - vec3(mix(1.52, 1.24, uRun), rbob,\n"
+"                     mix(3.85, -1.45, uRun));\n"
 "  float doc = person(dp);\n"
 "  if (doc < d) { d = doc; id = 10.0; }\n"
 "  return d; }\n"
@@ -228,7 +272,7 @@ static const char *WAKE_FS =
 "  for (int i = 0; i < 30; i++){\n"
 "    float d = scene(p + l*t, id);\n"
 "    if (d < 0.004) return 0.0;\n"
-"    r = min(r, 14.0*d/t);\n"
+"    r = min(r, 11.0*d/t);\n"
 "    t += clamp(d, 0.03, 0.35);\n"
 "    if (t > dist) break; }\n"
 "  return clamp(r, 0.0, 1.0); }\n"
@@ -238,6 +282,19 @@ static const char *WAKE_FS =
 "    o += (h - scene(p + n*h, id)) * s; s *= 0.6; }\n"
 "  return clamp(1.0 - 2.4*o, 0.0, 1.0); }\n"
 "\n"
+"vec3 face_of(vec3 hp, vec3 body){\n"
+"  float head  = smoothstep(0.150, 0.105, length(hp));\n"
+"  vec3  c     = mix(body, vec3(0.78, 0.64, 0.56), head);\n"
+"  float front = smoothstep(0.010, 0.055, hp.z);\n"
+"  float e1 = smoothstep(0.030, 0.014, length(hp.xy - vec2(-0.045, 0.028)));\n"
+"  float e2 = smoothstep(0.030, 0.014, length(hp.xy - vec2( 0.045, 0.028)));\n"
+"  float br = smoothstep(0.016, 0.006, abs(hp.y - 0.062))\n"
+"           * smoothstep(0.086, 0.052, abs(hp.x));\n"
+"  float mo = smoothstep(0.014, 0.005, abs(hp.y + 0.052))\n"
+"           * smoothstep(0.050, 0.026, abs(hp.x));\n"
+"  float f  = clamp(e1 + e2 + br * 0.7 + mo * 0.8, 0.0, 1.0) * front * head;\n"
+"  return mix(c, vec3(0.15, 0.12, 0.11), f); }\n"
+"\n"
 "vec3 albedo(float id, vec3 p, vec3 n){\n"
 "  if (id < 1.5) {         // painted wall, vinyl floor, ceiling\n"
 "    if (n.y > 0.9 && p.y < 0.2) {   // floor: warm vinyl with a tile seam\n"
@@ -246,17 +303,43 @@ static const char *WAKE_FS =
 "      return mix(vec3(0.55, 0.50, 0.44), vec3(0.38, 0.34, 0.30), seam)\n"
 "           * (0.92 + 0.16 * vn(p.xz * 7.0));\n"
 "    }\n"
-"    return vec3(0.88, 0.87, 0.83) * (0.94 + 0.09 * vn(p.zy * 3.0 + p.xx));\n"
+"    return vec3(0.80, 0.84, 0.80) * (0.94 + 0.09 * vn(p.zy * 3.0 + p.xx));\n"
 "  }\n"
 "  if (id < 2.5) return vec3(1.0);\n"
 "  if (id < 3.5) return vec3(1.0);\n"
-"  if (id < 4.5) return vec3(0.55, 0.57, 0.60);\n"
-"  if (id < 5.5) return vec3(0.22, 0.26, 0.34);   // scrubs blue, dark\n"
-"  if (id < 6.5) return vec3(0.72, 0.78, 0.82);   // the blanket\n"
+"  if (id < 4.5) return vec3(0.58, 0.60, 0.63);   // chrome\n"
+/* A head the colour of a head, with a face on the front of it. Two figures
+   stood in this room as featureless white lumps, and a lump is not a person
+   -- in the photographs the first thing you read is that somebody is looking
+   at you. Eyes, a brow and a mouth, on the half of the head that faces the
+   bed, is the whole of what that takes at this distance. */
+"  if (id < 5.5) {\n"
+"    vec3 hp = p - vec3(-1.50, 1.34, -1.03);\n"
+"    return face_of(hp, vec3(0.20, 0.24, 0.32));\n"
+"  }\n"
+"  if (id < 6.5) {                                // bedding, and it is not white\n"
+"    float w = 0.5 + 0.5*sin(p.x * 14.0 + p.z * 2.0);\n"
+"    return mix(vec3(0.74, 0.78, 0.80), vec3(0.58, 0.66, 0.73), w * 0.6);\n"
+"  }\n"
 "  if (id < 7.5) return vec3(0.42, 0.33, 0.24);   // the door\n"
-"  if (id < 8.5) return vec3(0.14, 0.15, 0.17);   // the monitor case\n"
+"  if (id < 8.5) return vec3(0.11, 0.12, 0.14);   // the monitor case\n"
 "  if (id < 9.5) return vec3(0.02, 0.03, 0.03);   // its screen, off\n"
-"  return vec3(0.86, 0.88, 0.90);                 // the coat\n"
+"  if (id < 10.5) {\n"
+"    vec3 lp = p - vec3(mix(1.52, 1.24, uRun), 0.0, mix(3.85, -1.45, uRun));\n"
+"    float collar = smoothstep(1.00, 1.13, lp.y) * smoothstep(1.30, 1.13, lp.y)\n"
+"                 * smoothstep(0.19, 0.06, abs(lp.x));\n"
+"    float plack  = smoothstep(0.060, 0.022, abs(lp.x))\n"
+"                 * smoothstep(1.04, 0.94, lp.y) * smoothstep(0.40, 0.58, lp.y);\n"
+"    vec3 ca = mix(vec3(0.90, 0.91, 0.92), vec3(0.26, 0.55, 0.54),\n"
+"                  clamp(collar + plack, 0.0, 1.0));\n"
+"    return face_of(lp - vec3(0.02, 1.34, 0.02), ca);\n"
+"  }\n"
+"  if (id < 11.5) return vec3(0.78, 0.64, 0.56);  // skin\n"
+"  if (id < 12.5) return vec3(0.10, 0.11, 0.13);  // the leads\n"
+"  if (id < 13.5) return vec3(0.86, 0.90, 0.84);  // fluid\n"
+"  if (id < 14.5) return vec3(0.42, 0.60, 0.52);  // the curtain, ward green\n"
+"  if (id < 15.5) return vec3(0.55, 0.72, 0.70);  // the gown, ward teal\n"
+"  return vec3(0.90, 0.91, 0.89);                 // the headwall\n"
 "}\n"
 "\n"
 "void main(){\n"
@@ -301,8 +384,8 @@ static const char *WAKE_FS =
 "\n"
 "  // the eye is not steady yet: the view drifts and settles as uSharp rises\n"
 "  vec2 drift = vec2(sin(uTime*0.7), cos(uTime*0.9)) * 0.012 * (1.0 - uSharp);\n"
-"  vec3 ro = vec3(0.0, 1.02, 1.55);\n"
-"  vec3 rd = normalize(vec3(uv.x + drift.x, uv.y + 0.30 + drift.y, -1.0) * vec3(1.05,1.05,1.0));\n"
+"  vec3 ro = vec3(0.0, 1.26, 1.86);\n"
+"  vec3 rd = normalize(vec3(uv.x + drift.x, uv.y + 0.14 + drift.y, -1.0) * vec3(1.05,1.05,1.0));\n"
 "\n"
 "  float id; float t = march(ro, rd, id);\n"
 "  vec3 col;\n"
@@ -355,14 +438,25 @@ static const char *WAKE_FS =
 "      }\n"
 "      sun *= 0.55;\n"
 "      // the panel overhead, one shadowed sample\n"
-"      vec3 pp = vec3(0.0, 2.78, -1.2);\n"
+/* Below the panel, not inside it. The fitting is a box spanning 2.755..2.845
+   and the light was at 2.78 -- inside its own solid -- so every shadow ray
+   toward it struck the panel from underneath and came back zero. The ceiling
+   light in this room has never lit anything: the median value of its
+   contribution over the whole frame was zero, the room was lit by a trickle
+   of window and fill at about two per cent, and the grade was hauling that
+   up to mid grey. Which is exactly what it looked like. */
+"      vec3 pp = vec3(0.0, 2.70, -1.2);\n"
 "      vec3 pl = pp - p; float pdist = length(pl); pl /= pdist;\n"
 "      vec3 ceil_l = vec3(0.95, 0.96, 1.0)\n"
-"                  * max(dot(n, pl), 0.0) * shadow(p, pl, pdist)\n"
+"                  * max(dot(n, pl), 0.0)\n""                  * mix(shadow(p, pl, pdist - 0.05), 1.0, 0.55)\n"
 "                  / (1.0 + pdist*pdist*0.10);\n"
 "      // sky fill so shadow cores stay alive\n"
 "      vec3 fill = vec3(0.30, 0.33, 0.38) * (0.5 + 0.5*n.y);\n"
-"      col = alb * (sun + ceil_l * 1.75 + fill * 0.55) * occ;\n"
+/* The fill was doing almost all of it, and a fill casts nothing -- so there
+   was no shadow anywhere in the room and the whole frame lived inside a fifth
+   of the range. Cut to a floor that keeps shadow cores from going black, with
+   the panel and the window carrying the rest, and the room gets its darks. */
+"      col = alb * (sun * 1.35 + ceil_l * 2.20 + fill * 0.11) * occ;\n"
 "      // vinyl gloss: one bounce toward whatever is bright\n"
 "      if (id < 1.5 && n.y > 0.9 && p.y < 0.2) {\n"
 "        vec3 rr = reflect(rd, n); float rid;\n"
@@ -375,7 +469,7 @@ static const char *WAKE_FS =
 "\n"
 "  // the grade: exposure, a filmic knee, grain, vignette, and the wash of\n"
 "  // waking - unfocused first, then white as the light arrives\n"
-"  col *= 1.55;\n"
+"  col *= 1.70;\n"
 "  col = mix(col, vec3(dot(col, vec3(0.333))), (1.0 - uSharp) * 0.55);\n"
 "  col += (1.0 - uSharp) * 0.24 * vec3(0.9, 0.94, 1.0);\n"
 /* uBright arrives as a flood and then lets go. Held at full it never stopped
@@ -384,6 +478,12 @@ static const char *WAKE_FS =
    reason to be behind. It comes in, and then the room is simply there. */
 "  col = mix(col, vec3(1.0), uBright * 0.50);\n"
 "  col = (col * (2.51*col + 0.03)) / (col * (2.43*col + 0.59) + 0.14);\n"
+/* The room came out of the tone curve inside a fifth of the range, the same
+   way the corridor did -- everything from the blanket to the coat landing
+   between 0.6 and 0.7 and reading as one grey sheet behind glass. An S over
+   the top gives it its blacks and its whites back, and the monitor stops
+   being the only thing with any contrast in it. */
+"  col = mix(col, col*col*(3.0 - 2.0*col), 0.30);\n"
 "  col += (h21(gl_FragCoord.xy + uTime) - 0.5) * 0.035;\n"
 "  col *= 1.0 - 0.30 * dot(uv, uv);\n"
 "  FragColor = vec4(clamp(col, 0.0, 1.0) * lash, 1.0);\n"
