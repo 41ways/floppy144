@@ -629,6 +629,11 @@ static const char *CAVE_FS =
 "float segd(vec3 p, vec3 a, vec3 b){ vec3 pa = p-a, ba = b-a;\n"
 "  float t = clamp(dot(pa,ba)/max(dot(ba,ba),1e-6), 0.0, 1.0);\n"
 "  return length(pa - ba*t); }\n"
+/* the same perpendicular under a Chebyshev norm: a square bore */
+"float segc(vec3 p, vec3 a, vec3 b){ vec3 pa = p-a, ba = b-a;\n"
+"  float t = clamp(dot(pa,ba)/max(dot(ba,ba),1e-6), 0.0, 1.0);\n"
+"  vec3 e = abs(pa - ba*t);\n"
+"  return max(e.x, max(e.y, e.z)); }\n"
 "\n"
 /* The same rooms game.c walks through. Both have to agree or you can see
    through a wall you cannot pass, so this is a transcription, not a
@@ -1011,8 +1016,12 @@ static const char *CAVE_FS =
 "  int i0 = int(clamp(-p.z/34.0, 0.0, 14.0));\n"
 /* narrowed where the corridor takes over -- mirrors branch_air */
 "  float brk = 1.75 * (1.0 - 0.42 * smoothstep(368.0, 476.0, -p.z));\n"
-"  m = max(m, brk - segd(p, uBrA[i0],   uBrB[i0]));\n"
-"  m = max(m, brk - segd(p, uBrA[i0+1], uBrB[i0+1]));\n"
+/* square section once the walls are square -- see branch_air */
+"  float sq = smoothstep(244.0, 270.0, -p.z);\n"
+"  m = max(m, brk - mix(segd(p, uBrA[i0], uBrB[i0]),\n"
+"                       segc(p, uBrA[i0], uBrB[i0]), sq));\n"
+"  m = max(m, brk - mix(segd(p, uBrA[i0+1], uBrB[i0+1]),\n"
+"                       segc(p, uBrA[i0+1], uBrB[i0+1]), sq));\n"
 "  return m; }\n"
 "\n"
 /* field() is the building; beasts() are in it. Both are distances to the
@@ -1051,20 +1060,34 @@ static const char *CAVE_FS =
 "  vec3 rd = normalize(uRight*uv.x + uUp*uv.y + uFwd*1.35);\n"
 "  float t = 0.05;\n"
 "  bool hit = false;\n"
+/* Over-relaxed sphere tracing.
+
+   The field lies: the row walls carve their doorways with a hard
+   conditional and rooms union with a max, so both hand back a distance
+   larger than the true one. Marching a fixed fraction of it walks into
+   walls, and on a wall seen edge-on that reads as the wall bulging toward
+   you - the back half of the game looked like it was melting. Capping the
+   step hid part of it and cost more: the setting that actually flattened
+   the wall ran at 82 ms a frame against 34.
+
+   So rather than trust the distance less, take a bolder step and check it.
+   If the sphere at the new point does not reach back to the old one, the
+   step jumped a surface; undo it and retry unrelaxed. Overshoot is caught
+   instead of avoided, so the ray keeps its reach across open floor and
+   still cannot pass through a wall. (Keinert et al., Enhanced Sphere
+   Tracing.) The variable is not called step because GLSL already has one.
+*/
+"  float om = 1.20, prev = 1e9, adv = 0.0;\n"
 "  for (int i = 0; i < 200; i++){\n"
 "    float d = worldD(uCam + rd*t);\n"
-"    if (d < 0.006) { hit = true; break; }\n"
-/* 0.42 is the cave's number, because the fbm lies about how far the wall is.
-   The corridor looked like it should take a bolder step -- it is boxes -- and
-   at 0.94 it grew a staircase down every wall edge instead. Its field is not
-   exact either: the row walls carve their doorways with a hard conditional
-   and the union of two rooms is a max, and both of those hand back a distance
-   larger than the true one, so a bold step walks straight through a wall near
-   a doorway. What fixes it is not a smaller factor but a ceiling on the step,
-   which bounds how far any single overshoot can carry -- and then the factor
-   can stay bold, so a ray grazing a pillar still has the reach to find the
-   wall behind it instead of giving up in the middle of the picture. */
-"    t += clamp(d * mix(0.42, 0.90, uRoom), 0.012, mix(9.0, 0.22, uRoom));\n"
+"    bool over = (om > 1.0) && (d + prev) < adv;\n"
+"    if (over) { adv -= om * adv; om = 1.0; }\n"
+"    else {\n"
+"      if (d < 0.006) { hit = true; break; }\n"
+"      adv  = d * om;\n"
+"      prev = d;\n"
+"    }\n"
+"    t += adv;\n"
 "    if (t > 32.0) break; }\n"
 /* In the dark, distance is black and that is the whole point - the cave is
    only what the sounding gave back. But once the corridor takes over, the

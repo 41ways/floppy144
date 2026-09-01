@@ -366,6 +366,26 @@ static void build_branches(void)
     }
 }
 
+/* seg_dist measures the perpendicular with a Euclidean norm, which is a
+ * cylinder. The same measurement under a Chebyshev norm is a square bore. */
+static float seg_cheb(float px, float py, float pz,
+                      float ax, float ay, float az,
+                      float bx, float by, float bz)
+{
+    float dx = bx - ax, dy = by - ay, dz = bz - az;
+    float wx = px - ax, wy = py - ay, wz = pz - az;
+    float dd = dx * dx + dy * dy + dz * dz;
+    float t  = dd > 1e-6f ? (wx * dx + wy * dy + wz * dz) / dd : 0.0f;
+    float ex, ey, ez, m;
+    if (t < 0.0f) t = 0.0f;
+    if (t > 1.0f) t = 1.0f;
+    ex = (float)fabs(wx - dx * t);
+    ey = (float)fabs(wy - dy * t);
+    ez = (float)fabs(wz - dz * t);
+    m = ex > ey ? ex : ey;
+    return ez > m ? ez : m;
+}
+
 static float branch_air(float x, float y, float z, int i)
 {
     if (i < 0 || i >= BRANCHES) return -1000.0f;
@@ -383,9 +403,23 @@ static float branch_air(float x, float y, float z, int i)
          * being a square room in the points and a round chamber in the rock. */
         float rk = BRANCH_RAD * (1.0f - 0.42f
                  * smoothstep01(GATE_3 + 8.0f, GATE_END - 4.0f, -z));
-        return rk - seg_dist(x, y, z,
-                             g_br[i][0], g_br[i][1], g_br[i][2],
-                             g_br[i][3], g_br[i][4], g_br[i][5]);
+        /* And square, once the walls are. A round bore cut through a flat
+         * wall leaves a curved section, and because these run along the old
+         * wandering axis while the ward is on a world grid, they crossed the
+         * walls at an angle: the whole back half was covered in smooth arcs
+         * that read as the building melting. A box section meets a flat wall
+         * in a straight line, so the same hole reads as a doorway. Same axis,
+         * same width, same voices at the far end. */
+        {
+            float sq = smoothstep01(GATE_2 + 4.0f, GATE_2 + 30.0f, -z);
+            float dr = seg_dist(x, y, z,
+                                g_br[i][0], g_br[i][1], g_br[i][2],
+                                g_br[i][3], g_br[i][4], g_br[i][5]);
+            float db = seg_cheb(x, y, z,
+                                g_br[i][0], g_br[i][1], g_br[i][2],
+                                g_br[i][3], g_br[i][4], g_br[i][5]);
+            return rk - (dr * (1.0f - sq) + db * sq);
+        }
     }
 }
 
@@ -3307,9 +3341,12 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
     }
 
     /* ping - not during the ambush; that moment is not yours to light */
-    /* Inside the building there is light, and nothing to sound for. The
-     * ping is the cave's instrument and it is left in the cave. */
-    if (g_stage < 3 && g_ev != 1 && in->ping && now >= g_ping_ready) {
+    /* Inside the building there is light, and nothing to sound for. The ping
+     * is the cave's instrument and it is left in the cave - so the click goes
+     * quiet the moment the walls turn square, not one gate later. Gating on
+     * g_stage < 3 left it working for the whole first half of the ward: the
+     * rooms begin at GATE_2 + 4, and STAGE 3 is already inside them. */
+    if (-g_pz < GATE_2 + 4.0f && g_ev != 1 && in->ping && now >= g_ping_ready) {
         ping_begin(now, f, r, u);
         g_ping_ready = now + PING_COOLDOWN;
     }
