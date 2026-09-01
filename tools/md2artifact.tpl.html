@@ -1,0 +1,107 @@
+<title>병원을 어긋내는 쉰 가지</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;600&display=swap">
+
+<style>
+  :root {
+    --ground:#0d1011; --surface:#14191a; --surface-2:#1b2123;
+    --line:#262e30;   --line-soft:#1e2527;
+    --ink:#dde3e0;    --ink-dim:#98a4a1; --ink-faint:#6b7876;
+    --accent:#3ad98a; --accent-dim:#1f6e48; --warn:#d9a441;
+  }
+  :root[data-theme="light"] {
+    --ground:#eef1ef; --surface:#ffffff; --surface-2:#f5f8f6;
+    --line:#ccd6d2;   --line-soft:#dee6e3;
+    --ink:#12191a;    --ink-dim:#4b5a57; --ink-faint:#71807d;
+    --accent:#10794a; --accent-dim:#8ed4b1; --warn:#8a5f0d;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --ground:#eef1ef; --surface:#ffffff; --surface-2:#f5f8f6;
+      --line:#ccd6d2;   --line-soft:#dee6e3;
+      --ink:#12191a;    --ink-dim:#4b5a57; --ink-faint:#71807d;
+      --accent:#10794a; --accent-dim:#8ed4b1; --warn:#8a5f0d;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--ground); color: var(--ink-dim);
+    font-family: "Source Serif 4", Georgia, "Nanum Myeongjo", serif;
+    font-size: 16.5px; line-height: 1.66; -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 52px 24px 96px; }
+
+  h1 {
+    font-family: "Archivo", system-ui, sans-serif; font-weight: 700;
+    font-size: clamp(30px, 4.6vw, 46px); line-height: 1.06;
+    letter-spacing: -.018em; margin: 0 0 6px; color: var(--ink);
+    text-wrap: balance;
+  }
+  h2 {
+    font-family: "Archivo", system-ui, sans-serif; font-weight: 700;
+    font-size: 14px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--ink); margin: 60px 0 0; padding-bottom: 10px;
+    border-bottom: 1px solid var(--line);
+  }
+  h3 {
+    font-family: "Archivo", system-ui, sans-serif; font-weight: 600;
+    font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--accent); margin: 40px 0 -4px;
+  }
+  p { margin: 16px 0 0; max-width: 68ch; }
+  p.entry {
+    background: var(--surface); border: 1px solid var(--line-soft);
+    border-left: 2px solid var(--accent-dim);
+    padding: 15px 18px; margin-top: 18px;
+  }
+  p.entry b:first-child { color: var(--ink); font-size: 17px;
+    font-family: "Archivo", system-ui, sans-serif; }
+  .arrow { color: var(--accent); font-weight: 600; }
+  b { color: var(--ink); font-weight: 600; }
+  em { color: var(--ink); font-style: italic; }
+  s { color: var(--ink-faint); }
+  code {
+    font-family: "JetBrains Mono", ui-monospace, monospace; font-size: .84em;
+    background: var(--surface-2); border: 1px solid var(--line-soft);
+    padding: 1px 5px; color: var(--ink);
+  }
+  pre {
+    background: var(--surface); border: 1px solid var(--line-soft);
+    padding: 14px 16px; overflow-x: auto; margin: 18px 0 0;
+  }
+  pre code { background: none; border: 0; padding: 0; font-size: 13px; }
+  hr { border: 0; border-top: 1px solid var(--line); margin: 44px 0 0; }
+
+  .tw { overflow-x: auto; margin: 20px 0 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 14.5px; }
+  th, td {
+    border: 1px solid var(--line-soft); padding: 9px 12px;
+    text-align: left; vertical-align: top;
+  }
+  th {
+    font-family: "Archivo", system-ui, sans-serif; font-size: 11px;
+    letter-spacing: .1em; text-transform: uppercase; color: var(--ink-faint);
+    background: var(--surface-2); font-weight: 600;
+  }
+  td { background: var(--surface); }
+  td:has(> .shot) { padding: 6px; }
+
+  .shot {
+    display: block; width: 100%; height: auto;
+    border: 1px solid var(--line); background: var(--surface-2);
+  }
+  p > .shot { margin: 18px 0 0; }
+
+  blockquote {
+    margin: 22px 0 0; padding: 16px 20px; background: var(--surface);
+    border-left: 2px solid var(--warn); color: var(--ink-dim);
+  }
+  blockquote p { margin: 0 0 10px; }
+  blockquote p:last-child { margin-bottom: 0; }
+  @media (max-width: 560px) { .wrap { padding: 32px 15px 64px; } body { font-size: 16px; } }
+</style>
+
+<div class="wrap">
+<!--BODY-->
+</div>
