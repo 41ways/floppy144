@@ -141,7 +141,7 @@ static GLint  w_res, w_time, w_open, w_bright, w_sharp, w_lamp, w_lampb;
 static GLuint g_cave_prog;
 static GLint  c_res, c_cam, c_fwd, c_right, c_up, c_seed, c_wander,
               c_rough, c_time, c_light, c_wet, c_room, c_road, c_white, c_wakez,
-              c_ward, c_hand,
+              c_ward, c_hand, c_choke, c_dark,
               c_pulse, c_hospy, c_blink, c_corrx, c_dooru, c_lampout,
               c_monn, c_monp, c_mond, c_bra, c_brb;
 static GLint  u_fade, u_grey;
@@ -1358,19 +1358,21 @@ static const char *VOICE[BRANCHES] = {
  *
  * The line comes first and the effect follows a moment later, so it reads as
  * one causing the other rather than as two things happening at once. */
-enum { WF_NONE, WF_TURN, WF_LIGHT, WF_HAND };
+enum { WF_NONE, WF_TURN, WF_LIGHT, WF_HAND, WF_CHOKE, WF_DARK };
 typedef struct { float dep; int fx; const char *line; } Ward;
 static const Ward WARD[] = {
     {  96.0f, WF_NONE,  "오늘로 열흘째래" },
     { 214.0f, WF_NONE,  "눈은 뜨는데 우릴 못 봐" },
     { 286.0f, WF_HAND,  "손 잡아 드릴게요" },
+    { 330.0f, WF_CHOKE, "석션 좀 하겠습니다" },
     { 368.0f, WF_NONE,  "보름째입니다. 오늘로 보름" },
     { 396.0f, WF_TURN,  "돌려 눕힐게요" },
     { 424.0f, WF_NONE,  "이대로 못 깨어나면요" },
     { 452.0f, WF_LIGHT, "불 좀 켤게요" },
-    { 478.0f, WF_NONE,  "아빠, 나 매일 올게" },
-    { 506.0f, WF_HAND,  "손 잡고 있을게. 여기 있어" },
-    { 530.0f, WF_TURN,  "자세 한 번 더 바꿉니다" }
+    { 478.0f, WF_CHOKE, "가래 좀 빼겠습니다" },
+    { 496.0f, WF_DARK,  "면회 시간 끝났습니다" },
+    { 512.0f, WF_HAND,  "안 가. 나 여기 있을게" },
+    { 534.0f, WF_TURN,  "자세 한 번 더 바꿉니다" }
 };
 #define WARDS ((int)(sizeof WARD / sizeof WARD[0]))
 static int   g_ward_n;      /* how many have come, so none comes twice */
@@ -1382,6 +1384,8 @@ static float g_roll_to;     /* where it is rolling to */
 static float g_roll_t;      /* how long it stays there */
 static float g_wardlit;     /* somebody put the light on out there */
 static float g_hand;        /* somebody is holding your hand */
+static float g_choke;       /* a catheter down the airway, felt from in here */
+static float g_dark;        /* visiting hours are over and the ward is empty */
 static int   g_fx_kind;     /* what the last line set going */
 static float g_fx_wait;     /* and how long until it does it */
 static int   g_days;        /* fifteen at its door, and climbing */
@@ -1921,11 +1925,11 @@ static void new_attempt(unsigned seed, float now)
     g_hum_t  = 0.0f;
     g_days   = 15;
     g_roll = g_roll_to = g_roll_t = 0.0f;
-    g_wardlit = g_hand = 0.0f;
+    g_wardlit = g_hand = g_choke = g_dark = 0.0f;
     g_fx_kind = WF_NONE; g_fx_wait = 0.0f;
     /* Anything the start depth is already past has been said. A run that
        opens at 400 m has not just walked in on someone saying it is day ten. */
-    for (g_ward_n = 0; g_ward_n < WARDS && WARD[g_ward_n].dep <= g_start_depth;)
+    for (g_ward_n = 0; g_ward_n < WARDS && WARD[g_ward_n].dep < g_start_depth;)
         g_ward_n++;
     g_check  = g_start_depth;
     g_gate_t = 0.0f; g_back = 0.0f;
@@ -2253,6 +2257,8 @@ void game_init(unsigned seed, float start_depth)
     c_wakez  = glGetUniformLocation(g_cave_prog, "uWakeZ");
     c_ward   = glGetUniformLocation(g_cave_prog, "uWard");
     c_hand   = glGetUniformLocation(g_cave_prog, "uHand");
+    c_choke  = glGetUniformLocation(g_cave_prog, "uChoke");
+    c_dark   = glGetUniformLocation(g_cave_prog, "uDark");
     c_dooru  = glGetUniformLocation(g_cave_prog, "uDoor");
     c_lampout= glGetUniformLocation(g_cave_prog, "uLampOut");
     c_monn   = glGetUniformLocation(g_cave_prog, "uMonN");
@@ -2612,6 +2618,8 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
             glUniform1f(c_wakez, WAKE_Z);
             glUniform1f(c_ward, g_wardlit);
             glUniform1f(c_hand, g_hand);
+            glUniform1f(c_choke, g_choke);
+            glUniform1f(c_dark, g_dark);
             glUniform1f(c_dooru, g_door_open);
             glUniform3fv(c_bra, 16, bra);
             glUniform3fv(c_brb, 16, brb);
@@ -2856,7 +2864,7 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
         g_travelled += (float)sqrt((g_px-ox)*(g_px-ox) + (g_py-oy)*(g_py-oy)
                                  + (g_pz-oz)*(g_pz-oz));
     } else if (len > 0.0001f) {
-        float s = MOVE_SPEED * dt / len;
+        float s = MOVE_SPEED * (1.0f - 0.62f * g_choke) * dt / len;
         {   float ox = g_px, oy = g_py, oz = g_pz;
             float moved;
             try_move(mx * s, my * s, mz * s);
@@ -3037,6 +3045,25 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
                     g_hand = 1.0f;
                     /* and nothing in here can hold on to you while it lasts */
                     for (mi = 0; mi < g_mon_count; mi++) g_mon[mi].stun = 3.4f;
+                } else if (g_fx_kind == WF_CHOKE) {
+                    /* A catheter goes down the airway of a body like this
+                     * several times a day, and the body gags on it every
+                     * time. From in here there is no catheter and no nurse:
+                     * there is simply no air, the walls close, and you cannot
+                     * get anywhere until it stops. It is the one thing the
+                     * ward does to you that is not a kindness, and it is the
+                     * closest this game gets to what being unable to wake up
+                     * actually feels like. */
+                    g_choke = 1.0f;
+                    audio_submerged(1);
+                } else if (g_fx_kind == WF_DARK) {
+                    /* Everybody goes home. The voices stop, the ward light
+                     * goes off, and for the first time the building is not
+                     * being watched from outside -- which is worse than
+                     * anything in it. */
+                    g_dark    = 1.0f;
+                    g_wardlit = 0.0f;
+                    audio_lampout();
                 }
                 g_fx_kind = WF_NONE;
             }
@@ -3047,6 +3074,12 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
         g_roll += (g_roll_to - g_roll) * (1.0f - (float)exp(-dt * 0.85f));
         if (g_wardlit > 0.0f) g_wardlit -= dt * 0.085f;
         if (g_hand    > 0.0f) g_hand    -= dt * 0.30f;
+        if (g_choke   > 0.0f) {
+            g_choke -= dt * 0.22f;
+            if (g_choke <= 0.0f) { g_choke = 0.0f; audio_submerged(g_wet); }
+        }
+        /* the dark lifts slowly: somebody comes back in the morning */
+        if (g_dark > 0.0f) g_dark -= dt * 0.020f;
         /* and the days keep going while you are in here, because they do.
          * A day every ninety seconds: no failure hangs off it, nothing is
          * taken away. It is only ever the number getting worse while you
@@ -3279,6 +3312,8 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
             glUniform1f(c_wakez, WAKE_Z);
             glUniform1f(c_ward, g_wardlit);
             glUniform1f(c_hand, g_hand);
+            glUniform1f(c_choke, g_choke);
+            glUniform1f(c_dark, g_dark);
             glUniform1f(c_dooru, g_door_open);
             glUniform1f(c_lampout, g_lamp_out);
             {   /* Indoors the things are geometry, not returns: the shader

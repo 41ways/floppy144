@@ -524,6 +524,8 @@ static const char *CAVE_FS =
    uWard: somebody put the light on out there. uHand: somebody took hold. */
 "uniform float uWard;\n"
 "uniform float uHand;\n"
+"uniform float uChoke;   // no air, and the walls come in with it\n"
+"uniform float uDark;    // the ward went home\n"
 "uniform float uDoor;     // 1 once it is open\n"
 "uniform float uLampOut;  // 1 once the bulb has gone\n"
 "uniform int   uMonN;\n"
@@ -1048,7 +1050,7 @@ static const char *CAVE_FS =
 /* The heart drives the swell; a hand on a switch out in the ward drives all
    of them at once, which is a different thing and has to look like one. */
 "    vec3 pan = vec3(0.94, 1.00, 0.96) * uRoom\n"
-"             * (0.78 + 0.95 * uBlink + 2.30 * uWard);\n"
+"             * (0.78 + 0.95 * uBlink + 2.30 * uWard) * (1.0 - 0.72 * uDark);\n"
 "    for (int px = 0; px < 2; px++)\n"
 "    for (int pz = 0; pz < 2; pz++) {\n"
 "      vec2 pcv = base + vec2(float(px), float(pz)) * 7.0;\n"
@@ -1206,6 +1208,14 @@ static const char *CAVE_FS =
    highlights back. Corridor only: the cave is dark on purpose, and a curve
    like this would take what little it has. */
 "  col = mix(col, col*col*(3.0 - 2.0*col), 0.45 * uRoom);\n"
+/* No air. The picture closes from the edges and what is left of it goes grey
+   -- the same thing that happens to a person about to faint, which is what
+   this is. Nothing about it is subtle on purpose. */
+"  if (uChoke > 0.001) {\n"
+"    float vg = smoothstep(0.02, 0.42, dot(uv, uv) * (0.55 + 1.45 * uChoke));\n"
+"    col = mix(col, vec3(dot(col, vec3(0.333))), uChoke * 0.55);\n"
+"    col *= 1.0 - uChoke * 0.92 * vg;\n"
+"  }\n"
 "  col += vec3(1.0, 0.98, 0.95) * uPulse * 0.10 * uRoom;\n"
 "  col = mix(col, vec3(1.0), uWhite);\n"
 "  FragColor = vec4(col, 1.0); }\n";
