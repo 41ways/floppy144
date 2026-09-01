@@ -520,6 +520,10 @@ static const char *CAVE_FS =
    the game said open room, and the camera spawned inside it. Third time a
    constant drifted between the two fields this session; a uniform cannot. */
 "uniform float uWakeZ;    // GATE_END + 66; CORR_Z is -20, LAMP_Z is +26\n"
+/* What the ward is doing to the body, arriving in the place made out of it.
+   uWard: somebody put the light on out there. uHand: somebody took hold. */
+"uniform float uWard;\n"
+"uniform float uHand;\n"
 "uniform float uDoor;     // 1 once it is open\n"
 "uniform float uLampOut;  // 1 once the bulb has gone\n"
 "uniform int   uMonN;\n"
@@ -1041,7 +1045,10 @@ static const char *CAVE_FS =
 /* A pulse, not a strobe. At 0.42 between beats and 2.17 on one the room was
    going almost dark and back five times over, which is a fault in the wiring;
    the fittings now sit at a readable level and swell on the beat. */
-"    vec3 pan = vec3(0.94, 1.00, 0.96) * uRoom * (0.78 + 0.95 * uBlink);\n"
+/* The heart drives the swell; a hand on a switch out in the ward drives all
+   of them at once, which is a different thing and has to look like one. */
+"    vec3 pan = vec3(0.94, 1.00, 0.96) * uRoom\n"
+"             * (0.78 + 0.95 * uBlink + 2.30 * uWard);\n"
 "    for (int px = 0; px < 2; px++)\n"
 "    for (int pz = 0; pz < 2; pz++) {\n"
 "      vec2 pcv = base + vec2(float(px), float(pz)) * 7.0;\n"
@@ -1146,6 +1153,12 @@ static const char *CAVE_FS =
 "         * 6.0 / (1.0 + bl2);\n"
 "  }\n"
 "  float fog = exp(-t * (0.075 - 0.03*uLight - 0.026*uRoom));\n"
+/* Held. Everything in this building is the colour of a tube; a hand closing
+   around yours is the only warm thing that happens in it, so it arrives as
+   warmth -- and it is the one moment the place stops being somewhere you are
+   alone in. */
+"  col = mix(col, col * vec3(1.24, 1.06, 0.88) + vec3(0.09, 0.045, 0.008),\n"
+"            uHand * 0.55);\n"
 "  col = mix(mix(vec3(0.010,0.012,0.018) + warm*0.045*uLight,\n"
 "                vec3(0.66, 0.63, 0.55), uRoom), col, fog);\n"/* The sign takes some of the haze and not all of it. Fogged like a wall it
    came out the same mint as everything else, and a sign that has gone the

@@ -141,6 +141,7 @@ static GLint  w_res, w_time, w_open, w_bright, w_sharp, w_lamp, w_lampb;
 static GLuint g_cave_prog;
 static GLint  c_res, c_cam, c_fwd, c_right, c_up, c_seed, c_wander,
               c_rough, c_time, c_light, c_wet, c_room, c_road, c_white, c_wakez,
+              c_ward, c_hand,
               c_pulse, c_hospy, c_blink, c_corrx, c_dooru, c_lampout,
               c_monn, c_monp, c_mond, c_bra, c_brb;
 static GLint  u_fade, u_grey;
@@ -1345,23 +1346,44 @@ static const char *VOICE[BRANCHES] = {
  * come twice in the cave -- quiet enough to be misheard -- and then keep
  * coming once the building is around you, where there is nothing left to
  * mistake it for. */
-typedef struct { float dep; const char *line; } Ward;
+/* Some of them do something.
+ *
+ * A body in a bed is not left alone for fifteen days: it gets turned every
+ * couple of hours so it does not break down, the light gets put on when
+ * somebody comes in, and somebody holds its hand. None of that stops at the
+ * skin. If the place you are lost in is made out of this body, then what is
+ * done to the body has to arrive in it -- the room rolls when they roll you,
+ * every light in the building comes up when a nurse reaches for a switch,
+ * and when a hand closes around yours the things hunting you let go.
+ *
+ * The line comes first and the effect follows a moment later, so it reads as
+ * one causing the other rather than as two things happening at once. */
+enum { WF_NONE, WF_TURN, WF_LIGHT, WF_HAND };
+typedef struct { float dep; int fx; const char *line; } Ward;
 static const Ward WARD[] = {
-    {  96.0f, "오늘로 열흘째래" },
-    { 214.0f, "눈은 뜨는데 우릴 못 봐" },
-    { 368.0f, "보름째입니다. 오늘로 보름" },
-    { 396.0f, "나 하루도 안 빼먹고 왔어" },
-    { 424.0f, "이대로 못 깨어나면요" },
-    { 452.0f, "3주 넘기면 어렵대요" },
-    { 478.0f, "아빠, 나 매일 올게" },
-    { 506.0f, "아무도 포기 안 했어" },
-    { 530.0f, "돌아와. 여기까지 왔잖아" }
+    {  96.0f, WF_NONE,  "오늘로 열흘째래" },
+    { 214.0f, WF_NONE,  "눈은 뜨는데 우릴 못 봐" },
+    { 286.0f, WF_HAND,  "손 잡아 드릴게요" },
+    { 368.0f, WF_NONE,  "보름째입니다. 오늘로 보름" },
+    { 396.0f, WF_TURN,  "돌려 눕힐게요" },
+    { 424.0f, WF_NONE,  "이대로 못 깨어나면요" },
+    { 452.0f, WF_LIGHT, "불 좀 켤게요" },
+    { 478.0f, WF_NONE,  "아빠, 나 매일 올게" },
+    { 506.0f, WF_HAND,  "손 잡고 있을게. 여기 있어" },
+    { 530.0f, WF_TURN,  "자세 한 번 더 바꿉니다" }
 };
 #define WARDS ((int)(sizeof WARD / sizeof WARD[0]))
 static int   g_ward_n;      /* how many have come, so none comes twice */
 static float g_hosp_t;      /* seconds spent inside the building */
 static float g_hum_t;       /* the fixtures, kept from ever going quiet */
 static float g_mon_beep;    /* the bedside monitor, once a beat */
+static float g_roll;        /* the world, rolled, because they rolled you */
+static float g_roll_to;     /* where it is rolling to */
+static float g_roll_t;      /* how long it stays there */
+static float g_wardlit;     /* somebody put the light on out there */
+static float g_hand;        /* somebody is holding your hand */
+static int   g_fx_kind;     /* what the last line set going */
+static float g_fx_wait;     /* and how long until it does it */
 static int   g_days;        /* fifteen at its door, and climbing */
 
 static unsigned g_heard;      /* which ones this attempt has brought back */
@@ -1764,11 +1786,25 @@ static void basis(float yaw, float pitch, float *f, float *r, float *u)
     u[0] = -sy * sp; u[1] =  cp;   u[2] =  cy * sp;
 }
 
+/* Roll a basis about its own forward axis. The view rolls; walking does not,
+ * because a rolled strafe would drive the player up into the ceiling -- what
+ * is turning is the room, not their feet. */
+static void roll_basis(const float *f, float *r, float *u)
+{
+    float c = (float)cos(g_roll), sn = (float)sin(g_roll);
+    float r2[3], u2[3];
+    int i;
+    (void)f;
+    for (i = 0; i < 3; i++) { r2[i] = r[i]*c + u[i]*sn; u2[i] = u[i]*c - r[i]*sn; }
+    for (i = 0; i < 3; i++) { r[i] = r2[i]; u[i] = u2[i]; }
+}
+
 static void mat4_view(float *m, float px, float py, float pz,
                       float yaw, float pitch)
 {
     float f[3], r[3], u[3];
     basis(yaw, pitch, f, r, u);
+    roll_basis(f, r, u);
     m[0]  =  r[0]; m[4] =  r[1]; m[8]  =  r[2]; m[12] = -(r[0]*px + r[1]*py + r[2]*pz);
     m[1]  =  u[0]; m[5] =  u[1]; m[9]  =  u[2]; m[13] = -(u[0]*px + u[1]*py + u[2]*pz);
     m[2]  = -f[0]; m[6] = -f[1]; m[10] = -f[2]; m[14] =  (f[0]*px + f[1]*py + f[2]*pz);
@@ -1884,6 +1920,9 @@ static void new_attempt(unsigned seed, float now)
     g_hosp_t = 0.0f;
     g_hum_t  = 0.0f;
     g_days   = 15;
+    g_roll = g_roll_to = g_roll_t = 0.0f;
+    g_wardlit = g_hand = 0.0f;
+    g_fx_kind = WF_NONE; g_fx_wait = 0.0f;
     /* Anything the start depth is already past has been said. A run that
        opens at 400 m has not just walked in on someone saying it is day ten. */
     for (g_ward_n = 0; g_ward_n < WARDS && WARD[g_ward_n].dep <= g_start_depth;)
@@ -2212,6 +2251,8 @@ void game_init(unsigned seed, float start_depth)
     c_blink  = glGetUniformLocation(g_cave_prog, "uBlink");
     c_corrx  = glGetUniformLocation(g_cave_prog, "uCorrX");
     c_wakez  = glGetUniformLocation(g_cave_prog, "uWakeZ");
+    c_ward   = glGetUniformLocation(g_cave_prog, "uWard");
+    c_hand   = glGetUniformLocation(g_cave_prog, "uHand");
     c_dooru  = glGetUniformLocation(g_cave_prog, "uDoor");
     c_lampout= glGetUniformLocation(g_cave_prog, "uLampOut");
     c_monn   = glGetUniformLocation(g_cave_prog, "uMonN");
@@ -2569,6 +2610,8 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
             glUniform1f(c_blink, g_blink);
             glUniform1f(c_corrx, g_corr_x);
             glUniform1f(c_wakez, WAKE_Z);
+            glUniform1f(c_ward, g_wardlit);
+            glUniform1f(c_hand, g_hand);
             glUniform1f(c_dooru, g_door_open);
             glUniform3fv(c_bra, 16, bra);
             glUniform3fv(c_brb, 16, brb);
@@ -2971,10 +3014,39 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
          * -- that is the point of them: the room you are in has no idea you
          * are working, and it keeps talking. */
         if (g_ward_n < WARDS && -g_pz >= WARD[g_ward_n].dep && g_note_t <= 0.0f) {
-            g_note   = WARD[g_ward_n].line;
-            g_note_t = 4.0f;
+            g_note    = WARD[g_ward_n].line;
+            g_note_t  = 4.0f;
+            g_fx_kind = WARD[g_ward_n].fx;
+            g_fx_wait = 1.4f;      /* let the line land before the world answers */
             g_ward_n++;
         }
+        /* what the ward does, arriving in here */
+        if (g_fx_kind != WF_NONE) {
+            g_fx_wait -= dt;
+            if (g_fx_wait <= 0.0f) {
+                if (g_fx_kind == WF_TURN) {
+                    /* onto the other side, and left there. They turn a body
+                     * every couple of hours; it does not turn back. */
+                    g_roll_to = (g_roll_to > 0.0f ? -0.62f : 0.62f);
+                    g_roll_t  = 26.0f;
+                } else if (g_fx_kind == WF_LIGHT) {
+                    g_wardlit = 1.0f;
+                    audio_beep();
+                } else if (g_fx_kind == WF_HAND) {
+                    int mi;
+                    g_hand = 1.0f;
+                    /* and nothing in here can hold on to you while it lasts */
+                    for (mi = 0; mi < g_mon_count; mi++) g_mon[mi].stun = 3.4f;
+                }
+                g_fx_kind = WF_NONE;
+            }
+        }
+        /* the roll eases in, sits, and eases back when the timer runs out */
+        if (g_roll_t > 0.0f) g_roll_t -= dt;
+        else g_roll_to = 0.0f;
+        g_roll += (g_roll_to - g_roll) * (1.0f - (float)exp(-dt * 0.85f));
+        if (g_wardlit > 0.0f) g_wardlit -= dt * 0.085f;
+        if (g_hand    > 0.0f) g_hand    -= dt * 0.30f;
         /* and the days keep going while you are in here, because they do.
          * A day every ninety seconds: no failure hangs off it, nothing is
          * taken away. It is only ever the number getting worse while you
@@ -3205,6 +3277,8 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
             glUniform1f(c_blink, g_blink);
             glUniform1f(c_corrx, g_corr_x);
             glUniform1f(c_wakez, WAKE_Z);
+            glUniform1f(c_ward, g_wardlit);
+            glUniform1f(c_hand, g_hand);
             glUniform1f(c_dooru, g_door_open);
             glUniform1f(c_lampout, g_lamp_out);
             {   /* Indoors the things are geometry, not returns: the shader
