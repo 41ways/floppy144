@@ -1331,6 +1331,37 @@ static const char *VOICE[BRANCHES] = {
     "맥박 있습니다. 맥박 있어요"
 };
 
+/* The other voices, and the ones that matter.
+ *
+ * The sixteen in the side passages are the arrest: the last thing this body
+ * heard, replayed, and they end with a pulse coming back. They saved the
+ * heart. They did not get the person, and that is the whole premise -- it is
+ * day fifteen and nobody has been home since.
+ *
+ * These are now. A ward, a chair that has been sat in every day for two
+ * weeks, and people talking to someone who has not answered once. They are
+ * the only thing in the game that says plainly what is happening, so they
+ * come twice in the cave -- quiet enough to be misheard -- and then keep
+ * coming once the building is around you, where there is nothing left to
+ * mistake it for. */
+typedef struct { float dep; const char *line; } Ward;
+static const Ward WARD[] = {
+    {  96.0f, "오늘로 열흘째래" },
+    { 214.0f, "눈은 뜨는데 우릴 못 봐" },
+    { 368.0f, "보름째입니다. 오늘로 보름" },
+    { 396.0f, "나 하루도 안 빼먹고 왔어" },
+    { 424.0f, "이대로 못 깨어나면요" },
+    { 452.0f, "3주 넘기면 어렵대요" },
+    { 478.0f, "아빠, 나 매일 올게" },
+    { 506.0f, "아무도 포기 안 했어" },
+    { 530.0f, "돌아와. 여기까지 왔잖아" }
+};
+#define WARDS ((int)(sizeof WARD / sizeof WARD[0]))
+static int   g_ward_n;      /* how many have come, so none comes twice */
+static float g_hosp_t;      /* seconds spent inside the building */
+static float g_hum_t;       /* the fixtures, kept from ever going quiet */
+static int   g_days;        /* fifteen at its door, and climbing */
+
 static unsigned g_heard;      /* which ones this attempt has brought back */
 static int      g_heard_n;
 
@@ -1848,6 +1879,13 @@ static void new_attempt(unsigned seed, float now)
     g_pings  = 0;
     g_heard  = 0;
     g_heard_n = 0;
+    g_hosp_t = 0.0f;
+    g_hum_t  = 0.0f;
+    g_days   = 15;
+    /* Anything the start depth is already past has been said. A run that
+       opens at 400 m has not just walked in on someone saying it is day ten. */
+    for (g_ward_n = 0; g_ward_n < WARDS && WARD[g_ward_n].dep <= g_start_depth;)
+        g_ward_n++;
     g_check  = g_start_depth;
     g_gate_t = 0.0f; g_back = 0.0f;
     g_wetfeet = 0.0f; g_step_acc = 0.0f;
@@ -2617,9 +2655,14 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
                 if (w < 1.0f)
                     sprintf(line, "BIS %d", 40 + (int)(bright * 60.0f));
                 else {
-                    int k = (int)((w - 1.0f) * 4.6f) % 3;
+                    int k = (int)((w - 1.0f) * 4.6f) % 5;
+                    /* What put you under, how long it kept you, how much of
+                     * it you brought back -- and then the only line that was
+                     * ever true of the whole thing. */
                     if (k == 0)      sprintf(line, "심정지 %d분 %02d초", secs / 60, secs % 60);
-                    else if (k == 1) sprintf(line, "들은 목소리 %d / %d", g_heard_n, BRANCHES);
+                    else if (k == 1) sprintf(line, "혼수 %d일", g_days);
+                    else if (k == 2) sprintf(line, "들은 목소리 %d / %d", g_heard_n, BRANCHES);
+                    else if (k == 3) sprintf(line, "모두 기다리고 있었다");
                     else             sprintf(line, "CLICK TO BEGIN AGAIN");
                 }
             }
@@ -2901,6 +2944,30 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
         }
     }
     if (g_note_t > 0.0f) g_note_t -= dt;
+    {   /* The ward, arriving on its own. Nothing the player does brings these
+         * -- that is the point of them: the room you are in has no idea you
+         * are working, and it keeps talking. */
+        if (g_ward_n < WARDS && -g_pz >= WARD[g_ward_n].dep && g_note_t <= 0.0f) {
+            g_note   = WARD[g_ward_n].line;
+            g_note_t = 4.0f;
+            g_ward_n++;
+        }
+        /* and the days keep going while you are in here, because they do.
+         * A day every ninety seconds: no failure hangs off it, nothing is
+         * taken away. It is only ever the number getting worse while you
+         * cannot find the way out, which is the whole feeling. */
+        if (-g_pz > GATE_2 + 4.0f) {
+            g_hosp_t += dt;
+            /* And it hums the whole time. A corridor with nobody in it is not
+             * silent -- it is full of the sound of its own lights, and that
+             * sound is most of why a photograph of an empty hallway feels the
+             * way it does. The voice runs twenty-four seconds; it is started
+             * again at twenty-two so it never lapses while you are inside. */
+            g_hum_t -= dt;
+            if (g_hum_t <= 0.0f) { audio_hum(); g_hum_t = 22.0f; }
+        } else g_hum_t = 0.0f;
+        g_days = 15 + (int)(g_hosp_t / 90.0f);
+    }
     g_pulse -= dt * 1.7f; if (g_pulse < 0.0f) g_pulse = 0.0f;
 
     /* the ambush, and the shock that answers it */
@@ -3232,14 +3299,18 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
         /* A threshold has to land as an event, not as a digit changing in
          * the corner. The readout gets out of the way and the screen says
          * where you are, in the same lettering the monitor uses. */
-        static const char *NAME[5] = { "", "수몰 구간", "병원이 되기 시작한다",
-                                       "백룸", "리미널 홀" };
+        /* A threshold is where the game tells you where you are, so these
+         * are where it stops being a cave and starts being the truth. */
+        static const char *NAME[5] = { "", "숨을 참아라",
+                                       "여기, 와 본 적 있다",
+                                       "보름째. 아직 못 깨어났다",
+                                       "문이 있다. 마지막이다" };
         char big[24];
         int  st = (g_back > 0.0f) ? g_stage : g_gate_n;
         if (st < 0) st = 0;
         if (st > 4) st = 4;
         sprintf(big, "STAGE %d", st + 1);
-        hud_build_wake(big, (g_back > 0.0f) ? "다시 내려간다" : NAME[st]);
+        hud_build_wake(big, (g_back > 0.0f) ? "아직이다. 다시" : NAME[st]);
         if (g_gate_t > 0.0f) g_gate_t -= dt;
     } else {   /* the readout */
         char left[40], right[40];
@@ -3265,6 +3336,13 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
                 && hash1((float)floor(now * 1.7f) + 11.0f) < slip * 0.17f)
                 sprintf(left, "STAGE %d   %d:%02d", g_stage + 1,
                         secs / 60, secs % 60);
+            else if (g_stage >= 3)
+                /* Metres stopped being progress at the second gate -- the
+                 * building is a maze and the number was just going up while
+                 * you got no nearer. This is the number that is actually
+                 * running, and it is the one you cannot do anything about. */
+                sprintf(left, "STAGE %d   \355\230\274\354\210\230 %d\354\235\274\354\247\270",
+                        g_stage + 1, g_days);
             else
                 sprintf(left, g_wet ? "STAGE %d   %5.1f M  SUBMERGED"
                                     : "STAGE %d   %5.1f M", g_stage + 1, dep);
@@ -3439,6 +3517,7 @@ int   game_stage(void)       { return g_stage; }
 int   game_quit(void)        { return g_quit; }
 void  game_set_pitch(float p){ g_pitch = p; }
 int   game_state(void)       { return g_state; }
+int   game_paused(void)      { return g_state == ST_MENU_; }
 float game_px(void)          { return g_px; }
 float game_py(void)          { return g_py; }
 float game_pz(void)          { return g_pz; }

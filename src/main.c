@@ -70,9 +70,15 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     case WM_KEYDOWN:
         if (wp == VK_ESCAPE) {
-            /* Esc belongs to the pause menu now; only an uncaptured Esc quits */
-            if (g_captured) g_menu = 1;
-            else g_running = 0;
+            /* Esc opens the menu and lets go of the mouse, which is the thing
+             * anyone pressing it actually wants: the pointer back. It used to
+             * open the menu while still holding the cursor pinned to the
+             * middle of the window, so the menu was open and the mouse was
+             * not yours -- and a second Esc quit the game outright, with no
+             * confirmation, one keypress after the one that looked like it
+             * had done nothing. Leaving is what EXIT is for. */
+            g_menu = 1;
+            set_capture(hwnd, 0);
         }
         if (wp == VK_RETURN) g_enter = 1;
         return 0;
@@ -563,10 +569,21 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
          * rather than on whatever the machine managed that frame. */
         if (shot_path[0]) { dt = 1.0f / 60.0f; now = (float)frame / 60.0f; }
 
-        in.fwd   = g_captured && (GetAsyncKeyState('W') & 0x8000) ? 1 : 0;
-        in.back  = g_captured && (GetAsyncKeyState('S') & 0x8000) ? 1 : 0;
-        in.left  = g_captured && (GetAsyncKeyState('A') & 0x8000) ? 1 : 0;
-        in.right = g_captured && (GetAsyncKeyState('D') & 0x8000) ? 1 : 0;
+        /* The menu answers to the keyboard whether or not the mouse is held,
+         * because Esc now lets the mouse go and the list still has to be
+         * walkable. And the arrows do what WASD does, everywhere -- the menu
+         * is a list, and a list is a thing people press Up and Down at. */
+        {
+            int nav = g_captured || game_paused();
+            in.fwd   = nav && ((GetAsyncKeyState('W') & 0x8000) ||
+                               (GetAsyncKeyState(VK_UP) & 0x8000))    ? 1 : 0;
+            in.back  = nav && ((GetAsyncKeyState('S') & 0x8000) ||
+                               (GetAsyncKeyState(VK_DOWN) & 0x8000))  ? 1 : 0;
+            in.left  = nav && ((GetAsyncKeyState('A') & 0x8000) ||
+                               (GetAsyncKeyState(VK_LEFT) & 0x8000))  ? 1 : 0;
+            in.right = nav && ((GetAsyncKeyState('D') & 0x8000) ||
+                               (GetAsyncKeyState(VK_RIGHT) & 0x8000)) ? 1 : 0;
+        }
         if (shot_path[0] && shot_pitch != 0.0f) game_set_pitch(shot_pitch);
         in.ping  = g_ping;
         in.menu  = g_menu;
@@ -618,6 +635,15 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
                 in.right = (shot_enter > 0 && frame > shot_enter + 10
                                            && frame < shot_enter + 70);
             }
+        }
+
+        /* Leaving the menu takes the mouse back, so CONTINUE puts you
+           straight into play instead of into a game you have to click on. */
+        {
+            static int was_paused = 0;
+            int paused = game_paused();
+            if (was_paused && !paused && !g_headless) set_capture(hwnd, 1);
+            was_paused = paused;
         }
 
         game_frame(&in, dt, now, g_width, g_height);
@@ -677,7 +703,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
             sprintf(t, "%s  -  lives %d  -  depth %.1f m  -  %d pts  -  %d hunting  -  %s",
                     APP_TITLE, game_lives(), game_depth(),
                     game_point_count(), game_monsters(),
-                    g_captured ? "click to ping, Esc to release"
+                    g_captured ? "click to ping, Esc for the menu"
                                : "click the window to look around");
             SetWindowTextA(hwnd, t);
         }

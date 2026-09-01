@@ -27,6 +27,7 @@ void  game_set_pitch(float p);                 /* -pitch: aim down, to check the
 void  game_probe(void);                        /* -probe: write probe.txt and exit */
 void  game_debug_beast(float now, int type);   /* the marched one, inside the building */
 int   game_state(void);
+int   game_paused(void); /* the menu is up: the keyboard drives it, mouse free */
 float game_px(void);
 float game_py(void);
 float game_pz(void);

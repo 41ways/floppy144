@@ -681,9 +681,12 @@ static const char *CAVE_FS =
 "  float m_flr = smoothstep(0.48, 0.86,  n.y);\n"
 "  float m_cei = smoothstep(0.48, 0.86, -n.y);\n"
 "  {\n"
-"    vec3 rmat = vec3(0.80, 0.765, 0.665);\n"                 /* wall paint */
-"    rmat = mix(rmat, vec3(0.395, 0.412, 0.390), m_flr);\n"   /* vinyl */
-"    rmat = mix(rmat, vec3(0.905, 0.895, 0.855), m_cei);\n"   /* ceiling tile */
+/* Colder, and a little green. Warm beige is a house; a corridor nobody has
+   walked down in two weeks is lit by tubes, and tubes are not warm. This is
+   most of what separates "a room" from "somewhere you should not still be". */
+"    vec3 rmat = vec3(0.760, 0.775, 0.735);\n"                 /* wall paint */
+"    rmat = mix(rmat, vec3(0.372, 0.400, 0.378), m_flr);\n"   /* vinyl */
+"    rmat = mix(rmat, vec3(0.880, 0.900, 0.870), m_cei);\n"   /* ceiling tile */
 "    alb = mix(alb, rmat, uRoom * 0.9);\n"
 "  }\n"
 /* The sign over the door -- the one saturated thing in the game. Down here
@@ -726,7 +729,12 @@ static const char *CAVE_FS =
    the place has a size you can feel. It fades out with distance rather than
    shimmering away into noise. */
 "  if (uRoom > 0.3) {\n"
-"    float wy    = p.y - centre(p.z).y;\n"
+/* Off the building's height, not the cave's. The rail, the skirting and the
+   dado are all measured from this, and the axis they were being measured from
+   wanders four metres -- so a handrail slid up and down the wall as you walked
+   the corridor, which is not something handrails do. */
+"    float wy    = p.y - mix(centre(p.z).y, uHospY,\n"
+"                           smoothstep(244.0, 259.0, -p.z));\n"
 "    float upr   = 1.0 - clamp(abs(n.y) * 2.4, 0.0, 1.0);\n"
 "    float lying = clamp(abs(n.y) * 1.8 - 0.7, 0.0, 1.0);\n"
 "    float near  = exp(-t * 0.11) * uRoom;\n"
@@ -834,7 +842,7 @@ static const char *CAVE_FS =
 "  float ao  = occl(p, n);\n"
 "  float fre = pow(1.0 - max(dot(n, -rd), 0.0), 3.0);\n"
 "\n"
-"  vec3 warm = mix(vec3(1.00, 0.93, 0.82), vec3(1.00, 0.96, 0.84), uRoom);\n"
+"  vec3 warm = mix(vec3(1.00, 0.93, 0.82), vec3(0.95, 1.00, 0.97), uRoom);\n"
 /* No ambient floor: a surface no light reaches stays black, or the
    sounding would stop being the way you see. The corridor doubles it. */
 "  float sky = clamp(n.y * 0.5 + 0.5, 0.0, 1.0);\n"
@@ -862,7 +870,7 @@ static const char *CAVE_FS =
 /* A pulse, not a strobe. At 0.42 between beats and 2.17 on one the room was
    going almost dark and back five times over, which is a fault in the wiring;
    the fittings now sit at a readable level and swell on the beat. */
-"    vec3 pan = vec3(1.00, 0.97, 0.86) * uRoom * (0.78 + 0.95 * uBlink);\n"
+"    vec3 pan = vec3(0.94, 1.00, 0.96) * uRoom * (0.78 + 0.95 * uBlink);\n"
 "    for (int px = 0; px < 2; px++)\n"
 "    for (int pz = 0; pz < 2; pz++) {\n"
 "      vec2 pcv = base + vec2(float(px), float(pz)) * 7.0;\n"
