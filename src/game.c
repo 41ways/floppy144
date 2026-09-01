@@ -141,7 +141,7 @@ static GLint  w_res, w_time, w_open, w_bright, w_sharp, w_lamp, w_lampb;
 static GLuint g_cave_prog;
 static GLint  c_res, c_cam, c_fwd, c_right, c_up, c_seed, c_wander,
               c_rough, c_time, c_light, c_wet, c_room, c_road, c_white, c_wakez,
-              c_ward, c_hand, c_choke, c_dark,
+              c_ward, c_hand, c_choke, c_dark, c_rain, c_alarm,
               c_pulse, c_hospy, c_blink, c_corrx, c_dooru, c_lampout,
               c_monn, c_monp, c_mond, c_bra, c_brb;
 static GLint  u_fade, u_grey;
@@ -1358,21 +1358,29 @@ static const char *VOICE[BRANCHES] = {
  *
  * The line comes first and the effect follows a moment later, so it reads as
  * one causing the other rather than as two things happening at once. */
-enum { WF_NONE, WF_TURN, WF_LIGHT, WF_HAND, WF_CHOKE, WF_DARK };
+enum { WF_NONE, WF_TURN, WF_LIGHT, WF_HAND, WF_CHOKE, WF_DARK,
+       WF_STAB, WF_RAIN, WF_STRETCH, WF_ALARM };
 typedef struct { float dep; int fx; const char *line; } Ward;
 static const Ward WARD[] = {
-    {  96.0f, WF_NONE,  "오늘로 열흘째래" },
-    { 214.0f, WF_NONE,  "눈은 뜨는데 우릴 못 봐" },
-    { 286.0f, WF_HAND,  "손 잡아 드릴게요" },
-    { 330.0f, WF_CHOKE, "석션 좀 하겠습니다" },
-    { 368.0f, WF_NONE,  "보름째입니다. 오늘로 보름" },
-    { 396.0f, WF_TURN,  "돌려 눕힐게요" },
-    { 424.0f, WF_NONE,  "이대로 못 깨어나면요" },
-    { 452.0f, WF_LIGHT, "불 좀 켤게요" },
-    { 478.0f, WF_CHOKE, "가래 좀 빼겠습니다" },
-    { 496.0f, WF_DARK,  "면회 시간 끝났습니다" },
-    { 512.0f, WF_HAND,  "안 가. 나 여기 있을게" },
-    { 534.0f, WF_TURN,  "자세 한 번 더 바꿉니다" }
+    /* In depth order, and it has to stay that way: the scan walks this table
+       with one index and never looks back, so an entry out of order is an
+       entry that never fires. */
+    {  96.0f, WF_NONE,    "오늘로 열흘째래" },
+    { 152.0f, WF_STAB,    "채혈 좀 하겠습니다" },
+    { 214.0f, WF_NONE,    "눈은 뜨는데 우릴 못 봐" },
+    { 258.0f, WF_RAIN,    "몸 좀 닦아 드릴게요" },
+    { 286.0f, WF_HAND,    "손 잡아 드릴게요" },
+    { 330.0f, WF_CHOKE,   "석션 좀 하겠습니다" },
+    { 344.0f, WF_ALARM,   "산소포화도 떨어집니다" },
+    { 368.0f, WF_NONE,    "보름째입니다. 오늘로 보름" },
+    { 396.0f, WF_TURN,    "돌려 눕힐게요" },
+    { 412.0f, WF_STRETCH, "검사실 다녀오겠습니다" },
+    { 424.0f, WF_NONE,    "이대로 못 깨어나면요" },
+    { 452.0f, WF_LIGHT,   "불 좀 켤게요" },
+    { 478.0f, WF_CHOKE,   "가래 좀 빼겠습니다" },
+    { 496.0f, WF_DARK,    "면회 시간 끝났습니다" },
+    { 512.0f, WF_HAND,    "안 가. 나 여기 있을게" },
+    { 534.0f, WF_TURN,    "자세 한 번 더 바꿉니다" }
 };
 #define WARDS ((int)(sizeof WARD / sizeof WARD[0]))
 static int   g_ward_n;      /* how many have come, so none comes twice */
@@ -1386,6 +1394,9 @@ static float g_wardlit;     /* somebody put the light on out there */
 static float g_hand;        /* somebody is holding your hand */
 static float g_choke;       /* a catheter down the airway, felt from in here */
 static float g_dark;        /* visiting hours are over and the ward is empty */
+static float g_rain;        /* they are washing you, and in here it comes down */
+static float g_alarm;       /* the monitor is unhappy about something */
+static float g_stretch;     /* the bed is moving and the corridor does not agree */
 static int   g_fx_kind;     /* what the last line set going */
 static float g_fx_wait;     /* and how long until it does it */
 static int   g_days;        /* fifteen at its door, and climbing */
@@ -1926,6 +1937,7 @@ static void new_attempt(unsigned seed, float now)
     g_days   = 15;
     g_roll = g_roll_to = g_roll_t = 0.0f;
     g_wardlit = g_hand = g_choke = g_dark = 0.0f;
+    g_rain = g_alarm = g_stretch = 0.0f;
     g_fx_kind = WF_NONE; g_fx_wait = 0.0f;
     /* Anything the start depth is already past has been said. A run that
        opens at 400 m has not just walked in on someone saying it is day ten. */
@@ -2259,6 +2271,8 @@ void game_init(unsigned seed, float start_depth)
     c_hand   = glGetUniformLocation(g_cave_prog, "uHand");
     c_choke  = glGetUniformLocation(g_cave_prog, "uChoke");
     c_dark   = glGetUniformLocation(g_cave_prog, "uDark");
+    c_rain   = glGetUniformLocation(g_cave_prog, "uRain");
+    c_alarm  = glGetUniformLocation(g_cave_prog, "uAlarm");
     c_dooru  = glGetUniformLocation(g_cave_prog, "uDoor");
     c_lampout= glGetUniformLocation(g_cave_prog, "uLampOut");
     c_monn   = glGetUniformLocation(g_cave_prog, "uMonN");
@@ -2620,6 +2634,8 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
             glUniform1f(c_hand, g_hand);
             glUniform1f(c_choke, g_choke);
             glUniform1f(c_dark, g_dark);
+            glUniform1f(c_rain, g_rain);
+            glUniform1f(c_alarm, g_alarm);
             glUniform1f(c_dooru, g_door_open);
             glUniform3fv(c_bra, 16, bra);
             glUniform3fv(c_brb, 16, brb);
@@ -2988,7 +3004,7 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
         float dz2 = g_pz + WAKE_Z, dx2 = g_px;
         float dd2 = (float)sqrt(dx2 * dx2 + dz2 * dz2);
         float t2  = 1.0f - smoothstep01(6.0f, 90.0f, dd2);
-        g_bpm = 50.0f + 30.0f * t2;
+        g_bpm = 50.0f + 30.0f * t2 + 46.0f * g_alarm;
         g_beat += dt * (g_bpm / 60.0f);
         if (g_beat >= 1.0f) {
             g_beat -= 1.0f;
@@ -3056,6 +3072,25 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
                      * actually feels like. */
                     g_choke = 1.0f;
                     audio_submerged(1);
+                } else if (g_fx_kind == WF_STAB) {
+                    /* a needle, which from in here is simply a white second
+                     * that nobody explains */
+                    g_flash = 0.85f;
+                    audio_hit();
+                } else if (g_fx_kind == WF_RAIN) {
+                    /* Washed. The most literal borrowing there is: the
+                     * dreamer gets wet, so it rains in the dream. */
+                    g_rain = 1.0f;
+                } else if (g_fx_kind == WF_ALARM) {
+                    /* the monitor does not like the numbers, and the heart
+                     * driving the lights in here speeds up with it */
+                    g_alarm = 1.0f;
+                    audio_flatline();
+                } else if (g_fx_kind == WF_STRETCH) {
+                    /* Wheeled off for a scan. The body is moving and the
+                     * building is not, so the building is what gives: the
+                     * corridor pulls away from you while you stand in it. */
+                    g_stretch = 1.0f;
                 } else if (g_fx_kind == WF_DARK) {
                     /* Everybody goes home. The voices stop, the ward light
                      * goes off, and for the first time the building is not
@@ -3079,7 +3114,10 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
             if (g_choke <= 0.0f) { g_choke = 0.0f; audio_submerged(g_wet); }
         }
         /* the dark lifts slowly: somebody comes back in the morning */
-        if (g_dark > 0.0f) g_dark -= dt * 0.020f;
+        if (g_dark    > 0.0f) g_dark    -= dt * 0.020f;
+        if (g_rain    > 0.0f) g_rain    -= dt * 0.055f;
+        if (g_alarm   > 0.0f) g_alarm   -= dt * 0.075f;
+        if (g_stretch > 0.0f) g_stretch -= dt * 0.13f;
         /* and the days keep going while you are in here, because they do.
          * A day every ninety seconds: no failure hangs off it, nothing is
          * taken away. It is only ever the number getting worse while you
@@ -3251,7 +3289,12 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
     }
     glClear(GL_COLOR_BUFFER_BIT);
 
-    mat4_persp(proj, 1.30f,
+    /* A body being wheeled somewhere is a body that is moving while the
+     * building it is dreaming is not, so the building is what gives: the
+     * corridor pulls away from you while you stand still in it. It is a
+     * focal length change and nothing else moves, which is exactly the
+     * shot it is borrowed from. */
+    mat4_persp(proj, 1.30f + 0.62f * g_stretch,
                (float)width / (height > 0 ? (float)height : 1.0f),
                0.05f, 60.0f);
     mat4_view(view, g_px, g_py, g_pz, g_yaw, g_pitch);
@@ -3314,6 +3357,8 @@ void game_frame(const GameInput *in, float dt, float now, int width, int height)
             glUniform1f(c_hand, g_hand);
             glUniform1f(c_choke, g_choke);
             glUniform1f(c_dark, g_dark);
+            glUniform1f(c_rain, g_rain);
+            glUniform1f(c_alarm, g_alarm);
             glUniform1f(c_dooru, g_door_open);
             glUniform1f(c_lampout, g_lamp_out);
             {   /* Indoors the things are geometry, not returns: the shader

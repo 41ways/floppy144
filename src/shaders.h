@@ -526,6 +526,8 @@ static const char *CAVE_FS =
 "uniform float uHand;\n"
 "uniform float uChoke;   // no air, and the walls come in with it\n"
 "uniform float uDark;    // the ward went home\n"
+"uniform float uRain;    // they are washing the body\n"
+"uniform float uAlarm;   // the monitor is unhappy\n"
 "uniform float uDoor;     // 1 once it is open\n"
 "uniform float uLampOut;  // 1 once the bulb has gone\n"
 "uniform int   uMonN;\n"
@@ -1211,6 +1213,23 @@ static const char *CAVE_FS =
 /* No air. The picture closes from the edges and what is left of it goes grey
    -- the same thing that happens to a person about to faint, which is what
    this is. Nothing about it is subtle on purpose. */
+/* Washed. The dreamer gets wet, so it rains in the dream -- the most literal
+   borrowing there is, and the only weather this building will ever have.
+   Screen space streaks: there is no water in the field, only on the lens of
+   whatever is looking, which is about right for something that is not really
+   happening where you are. */
+"  if (uRain > 0.001) {\n"
+"    vec2  rq = vec2(uv.x * 26.0, uv.y * 2.4 - uTime * 1.35);\n"
+"    float rc = floor(rq.x);\n"
+"    float rs = fract(sin(rc * 91.7) * 4371.3);\n"
+"    float rv = fract(rq.y + rs);\n"
+"    float st = smoothstep(0.86, 0.995, rv) * smoothstep(0.16, 0.06, abs(fract(rq.x) - 0.5));\n"
+"    col += vec3(0.72, 0.80, 0.86) * st * uRain * 0.30 * step(0.35, rs);\n"
+"  }\n"
+/* and the monitor going off does what an alarm does to a room: everything in
+   it goes the colour of the alarm. */
+"  col = mix(col, col * vec3(1.55, 0.62, 0.55) + vec3(0.10, 0.0, 0.0),\n"
+"            uAlarm * 0.62);\n"
 "  if (uChoke > 0.001) {\n"
 "    float vg = smoothstep(0.02, 0.42, dot(uv, uv) * (0.55 + 1.45 * uChoke));\n"
 "    col = mix(col, vec3(dot(col, vec3(0.333))), uChoke * 0.55);\n"
