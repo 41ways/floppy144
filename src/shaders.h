@@ -395,6 +395,8 @@ static const char *CAVE_FS =
    through a wall you cannot pass, so this is a transcription, not a
    second design. */
 "bool openN(float cx, float cz){\n"
+/* the first rows always let you in -- see cell_open_n in game.c */
+"  if (cz * 7.0 > -266.0) return true;\n"
 "  return h1(cx * 13.31 + cz * 7.77 + uSeed) < 0.62; }\n"
 "bool openW(float cx, float cz){\n"
 "  float h = h1(cx * 5.19 - cz * 11.03 + uSeed * 3.0);\n"
@@ -402,19 +404,27 @@ static const char *CAVE_FS =
 "  return !openN(cx, cz); }\n"
 "float roomsAir(vec3 p, float floorY){\n"
 "  float air = 1.55 - abs(p.y - floorY - 1.30);\n"
+/* A doorway belongs to the cell the point is in, so the -z walls take their
+   x from cx alone and vary over the two z-edges, and the -x walls take their
+   z from cz alone. Running both over both neighbours applied each wall twice,
+   once carrying a doorway seven metres away, and the second copy sealed the
+   first -- see rooms_air in game.c. */
 "  float cx = floor(p.x / 7.0), cz = floor(p.z / 7.0);\n"
-"  for (int i = 0; i <= 1; i++)\n"
-"  for (int j = 0; j <= 1; j++) {\n"
-"    float ax = cx + float(i), az = cz + float(j);\n"
-"    float bx = ax * 7.0, bz = az * 7.0;\n"
+"  for (int k = 0; k <= 1; k++) {\n"
+"    float az = cz + float(k);\n"
+"    float bz = az * 7.0, bx = cx * 7.0;\n"
 "    float d1 = abs(p.z - bz) - 0.22;\n"
-"    float o1 = h1(ax * 3.7 + az * 9.1 + uSeed) - 0.5;\n"
+"    float o1 = h1(cx * 3.7 + az * 9.1 + uSeed) - 0.5;\n"
 "    float c1 = bx + 3.5 + o1 * (7.0 - 1.35 * 2.4);\n"
-"    if (!openN(ax, az) || abs(p.x - c1) > 1.35) air = min(air, d1);\n"
+"    if (!openN(cx, az) || abs(p.x - c1) > 1.35) air = min(air, d1);\n"
+"  }\n"
+"  for (int k = 0; k <= 1; k++) {\n"
+"    float ax = cx + float(k);\n"
+"    float bx = ax * 7.0, bz = cz * 7.0;\n"
 "    float d2 = abs(p.x - bx) - 0.22;\n"
-"    float o2 = h1(ax * 8.3 - az * 2.9 + uSeed) - 0.5;\n"
+"    float o2 = h1(ax * 8.3 - cz * 2.9 + uSeed) - 0.5;\n"
 "    float c2 = bz + 3.5 + o2 * (7.0 - 1.35 * 2.4);\n"
-"    if (!openW(ax, az) || abs(p.z - c2) > 1.35) air = min(air, d2);\n"
+"    if (!openW(ax, cz) || abs(p.z - c2) > 1.35) air = min(air, d2);\n"
 "  }\n"
 "  return air; }\n"
 /* One of the things, as a distance. A low body slung between eight legs,
@@ -541,7 +551,11 @@ static const char *CAVE_FS =
 "  float dep = -p.z;\n"
 "  if (dep > 526.0 - 20.0) {\n"
 "    float fl2 = cyh - 1.35;\n"
-"    float cor = min(1.9 - abs(p.x - uCorrX), 1.55 - abs(p.y - fl2 - 1.30));\n"
+/* funnelled, matching cave_sdf: wide where the rooms end, a corridor by the
+   time it reaches the door */
+"    float fq  = 1.0 - smoothstep(526.0 - 20.0, 526.0 - 11.0, dep);\n"
+"    float cor = min((1.9 + 58.0 * fq) - abs(p.x - uCorrX),\n"
+"                    1.55 - abs(p.y - fl2 - 1.30));\n"
 "    boxm = mix(boxm, cor, smoothstep(526.0 - 20.0, 526.0 - 15.0, dep));\n"
 "  }\n"
 "  if (dep > 526.0 + 1.2) {\n"

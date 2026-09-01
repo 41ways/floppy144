@@ -430,7 +430,14 @@ static float gate_bulge(float z)
 
 static int cell_open_n(int cx, int cz)     /* the wall at -z of this cell */
 {
-    float h = hash1((float)cx * 13.31f + (float)cz * 7.77f + g_seed);
+    float h;
+    /* The first rows always let you in. The cave narrows to about two metres
+     * as the building blends over it, so you arrive at one x with no room to
+     * go sideways, and if that cell's north wall happened to be shut the whole
+     * hospital was behind it -- about one seed in twenty, unwinnable, and it
+     * would have looked exactly like the maze being hard. */
+    if ((float)cz * CELL > -(GATE_2 + 26.0f)) return 1;
+    h = hash1((float)cx * 13.31f + (float)cz * 7.77f + g_seed);
     return h < 0.62f;
 }
 
@@ -451,27 +458,39 @@ static float rooms_air(float x, float y, float z, float floor_y)
     float air  = slab;
     int   cx   = (int)floorf(x / CELL);
     int   cz   = (int)floorf(z / CELL);
-    int   i, j;
+    int   k;
 
-    for (i = 0; i <= 1; i++) {
-        for (j = 0; j <= 1; j++) {
-            int  ax = cx + i, az = cz + j;
-            float bx = (float)ax * CELL, bz = (float)az * CELL;
-            {   /* the wall on this cell's -z side */
-                float d  = (float)fabs(z - bz) - WALL_T;
-                float o  = hash1((float)ax * 3.7f + (float)az * 9.1f + g_seed) - 0.5f;
-                float dc = bx + CELL * 0.5f + o * (CELL - DOOR_W * 2.4f);
-                if (!cell_open_n(ax, az) || (float)fabs(x - dc) > DOOR_W)
-                    if (d < air) air = d;
-            }
-            {   /* and on its -x side */
-                float d  = (float)fabs(x - bx) - WALL_T;
-                float o  = hash1((float)ax * 8.3f - (float)az * 2.9f + g_seed) - 0.5f;
-                float dc = bz + CELL * 0.5f + o * (CELL - DOOR_W * 2.4f);
-                if (!cell_open_w(ax, az) || (float)fabs(z - dc) > DOOR_W)
-                    if (d < air) air = d;
-            }
-        }
+    /* A wall slab here has no extent along itself -- `fabs(z - bz) - WALL_T`
+     * is the whole wall line, not this cell's piece of it -- and the doorway
+     * is punched by a test on x. So which cell's doorway gets punched matters
+     * absolutely, and the old loop ran both walls over both neighbours: the
+     * -z plane was applied once carrying cell cx's doorway and once carrying
+     * cell cx+1's, seven metres away, and the second copy closed the first.
+     * Every wall in the building was solid across its whole length. Nothing
+     * past the second gate could be walked to -- the last 270 metres of the
+     * game, the hospital, the corridor, the door and the ending, all sealed
+     * behind the first row of rooms.
+     *
+     * A wall's doorway belongs to the cell the point is in, so the -z walls
+     * take their x from cx and only cx, and vary over the two z-edges; the
+     * -x walls take their z from cz and vary over the two x-edges. */
+    for (k = 0; k <= 1; k++) {          /* this cell's two walls across z */
+        int   az = cz + k;
+        float bz = (float)az * CELL, bx = (float)cx * CELL;
+        float d  = (float)fabs(z - bz) - WALL_T;
+        float o  = hash1((float)cx * 3.7f + (float)az * 9.1f + g_seed) - 0.5f;
+        float dc = bx + CELL * 0.5f + o * (CELL - DOOR_W * 2.4f);
+        if (!cell_open_n(cx, az) || (float)fabs(x - dc) > DOOR_W)
+            if (d < air) air = d;
+    }
+    for (k = 0; k <= 1; k++) {          /* and its two across x */
+        int   ax = cx + k;
+        float bx = (float)ax * CELL, bz = (float)cz * CELL;
+        float d  = (float)fabs(x - bx) - WALL_T;
+        float o  = hash1((float)ax * 8.3f - (float)cz * 2.9f + g_seed) - 0.5f;
+        float dc = bz + CELL * 0.5f + o * (CELL - DOOR_W * 2.4f);
+        if (!cell_open_w(ax, cz) || (float)fabs(z - dc) > DOOR_W)
+            if (d < air) air = d;
     }
     return air;
 }
@@ -543,7 +562,16 @@ static float cave_sdf(float x, float y, float z)
             if (dep > CORR_Z) {
                 /* the corridor: two walls, a floor, a ceiling, nothing else */
                 float fl2 = cyh - 1.35f;
-                float cw  = 1.9f - (float)fabs(x - g_corr_x);
+                /* It funnels. A 3.8 m slot on one fixed line, blended in over
+                 * five metres, is only reachable from the rooms that happen
+                 * to sit on that line -- and the building has no outer wall,
+                 * so the rooms run sideways for ever while the way out is at
+                 * one x. A quarter of the seeds sealed the ending off here
+                 * even after the walls were fixed. Wide where the rooms end
+                 * and narrowing to a corridor, so the maze opens out and hands
+                 * you the door instead of hiding it. */
+                float fq  = 1.0f - smoothstep01(CORR_Z, CORR_Z + 9.0f, dep);
+                float cw  = (1.9f + 58.0f * fq) - (float)fabs(x - g_corr_x);
                 float ch  = 1.55f - (float)fabs(y - fl2 - 1.30f);
                 float cor = cw < ch ? cw : ch;
                 float kk2 = smoothstep01(CORR_Z, CORR_Z + 5.0f, dep);

@@ -61,6 +61,10 @@ HARNESS = r"""
 #define GATE_W 5.0f
 #define DEPTH_FULL 480.0f
 #define PLAYER_R 0.62f
+/* The last twenty metres are one straight corridor to the door, and past the
+ * door is the room with the bulb. Both are outside the slice, like the gates. */
+#define CORR_Z (WAKE_Z - 20.0f)
+#define LAMP_Z (WAKE_Z + 26.0f)
 /* BRANCHES and the BRANCH_* sizes are not repeated here: they live inside the
  * slice, and a second copy that disagreed would quietly flood a cave the game
  * does not have. Everything above this line is outside the slice. */
@@ -70,13 +74,29 @@ HARNESS = r"""
  * flooded, because the player can be anywhere in it when they walk the hall. */
 static float g_shockf;
 
+/* The building does not undulate: one height and one corridor line are taken
+ * at the entrance and held. new_attempt() sets these, and the flood has to set
+ * them the same way -- left at zero the check floods a hospital built at y = 0
+ * and a corridor down x = 0, which is not the building the game has, and would
+ * have reported on a maze nobody plays. */
+static float g_hosp_y;
+static float g_corr_x;
+/* Shut. That the door opens once you are in front of it is not in question;
+ * whether you can get in front of it is the whole point of this tool. */
+static float g_door_open;
+
 %(slice)s
 
 /* --- the flood ---------------------------------------------------------- */
 
 #define CELL   0.25f            /* finer than the 0.17 m walls are thick */
 #define XSPAN  48.0f            /* the tunnel wanders ~5 m, gaps reach ~8 more */
-#define ZLO    (GATE_2 + 10.0f) /* below the blend-in, safely inside the hall */
+/* At the doorway, not ten metres past it. The hall used to be pillars, so any
+ * row was as good a place to start as any other; the building is rooms with
+ * one doorway apiece, and a grid starting inside it seeds the flood in a room
+ * whose only way out faces back the way you came -- outside the grid. Every
+ * seed came back sealed, from a maze that is not. */
+#define ZLO    (GATE_2 + 4.0f)
 #define ZHI    WAKE_Z
 
 static int NX, NZ;
@@ -92,13 +112,22 @@ static int idx(int ix, int iz) { return iz * NX + ix; }
  * promise. Which is why -y exists. */
 static float g_probe_y = -0.3f;   /* metres below the tunnel centre */
 
+/* Probed against the height the building is actually at, not the tunnel's.
+ * The hall used to inherit the cave's wandering axis, so following the tunnel
+ * centre was the same thing as following the floor. It is not any more: the
+ * undulation dies out over the first fifteen metres and the floor then holds
+ * one height, which can be metres from where the axis has drifted to. Probing
+ * the old way put the sample inside rock at the very first row -- the flood
+ * had nowhere to start and reported the game unfinishable on every seed. */
 static int walkable(int ix, int iz)
 {
-    float cx, cy;
+    float cx, cy, st2, cyh;
     float x = -XSPAN + ix * CELL;
     float z = -(ZLO + iz * CELL);
     tunnel_centre(z, &cx, &cy);
-    return cave_sdf(x, cy + g_probe_y, z) >= PLAYER_R;
+    st2 = smoothstep01(GATE_2 + 4.0f, GATE_2 + 19.0f, -z);
+    cyh = cy * (1.0f - st2) + g_hosp_y * st2;
+    return cave_sdf(x, cyh + g_probe_y, z) >= PLAYER_R;
 }
 
 /* The hall stops at a wall with the door in it, so the last half-metre of the
@@ -189,6 +218,15 @@ int main(int argc, char **argv)
             }
             g_shockf = shocks[s];
             build_branches();
+            {   /* the same two the game takes in new_attempt(), in the same
+                   order, off the cave that was just rolled */
+                float hx, hy, qx, qy;
+                tunnel_centre(-(GATE_2 + 4.0f), &hx, &hy);
+                g_hosp_y = hy;
+                tunnel_centre(-CORR_Z, &qx, &qy);
+                g_corr_x = qx;
+                g_door_open = 0.0f;
+            }
 
             ok  = flood(&reached, &open, &deepest);
             iso = open ? 100.0 * (open - reached) / open : 0.0;
