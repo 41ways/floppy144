@@ -22,10 +22,10 @@ float game_depth(void);
 int   game_lives(void);
 int   game_monsters(void);
 int   game_stage(void);
-int   game_quit(void);
-void  game_set_pitch(float p);
-void  game_probe(void);
-void  game_debug_beast(float now, int type);   /* the menu asked to leave */
+int   game_quit(void);   /* the menu asked to leave */
+void  game_set_pitch(float p);                 /* -pitch: aim down, to check the ground lock */
+void  game_probe(void);                        /* -probe: write probe.txt and exit */
+void  game_debug_beast(float now, int type);   /* the marched one, inside the building */
 int   game_state(void);
 float game_px(void);
 float game_py(void);
