@@ -573,6 +573,11 @@ static const char *CAVE_FS =
 "  float W[4] = float[4]( 8.0, 5.0, 5.0,  5.0);\n"
 "  if (best > W[k]*4.0) return 0.0;\n"
 "  dz = d - G[k]; return R[k] * exp(-(dz*dz)/(2.0*W[k]*W[k])); }\n"
+/* One stretch of the building, with soft ends. The whole point of a zone is
+   that you cross into it: a treatment applied to all three hundred metres is
+   not a zone, it is the building, and then nothing has changed. */
+"float zone(float dep, float a, float b){\n"
+"  return smoothstep(a - 5.0, a, dep) * (1.0 - smoothstep(b, b + 5.0, dep)); }\n"
 "float segd(vec3 p, vec3 a, vec3 b){ vec3 pa = p-a, ba = b-a;\n"
 "  float t = clamp(dot(pa,ba)/max(dot(ba,ba),1e-6), 0.0, 1.0);\n"
 "  return length(pa - ba*t); }\n"
@@ -961,20 +966,25 @@ static const char *CAVE_FS =
  *
  * All of it read off the wall's own coordinates, so it costs no data, and all
  * of it behind uProto so the shipped building is untouched. */
-"    if (uProto == 8) {\n"
+/* Two stretches of this building have been left to fail, and the rest has
+   not. Crossing from one into the other is the whole effect -- a corridor
+   away and it is twenty years later, which is a thing that only happens in
+   here. */
+"    float decayZ = max(zone(-p.z, 286.0, 312.0), zone(-p.z, 398.0, 436.0));\n"
+"    if (decayZ > 0.004) {\n"
 "      float dirt = grain(p * 1.1);\n"
-"      alb *= vec3(1.08, 0.96, 0.71);\n"
-"      alb *= 0.88 + 0.20 * dirt;\n"
+"      alb = mix(alb, alb * vec3(1.08, 0.96, 0.71), decayZ);\n"
+"      alb = mix(alb, alb * (0.88 + 0.20 * dirt), decayZ);\n"
 /* Where the building has actually failed, and where it merely looks old.
    Everything below is multiplied by this, because damage everywhere is not
    damage -- it is a texture, and the first pass came back looking like the
    whole ward had been carved out of granite. A building falls down in
    patches, and the patches are what the eye reads. */
-"      float dmg = smoothstep(0.50, 0.72, grain(p * 0.26));\n"
+"      float dmg = smoothstep(0.50, 0.72, grain(p * 0.26)) * decayZ;\n"
 /* water gets in at the ceiling first and comes down the wall in columns */
 "      float cn  = grain(vec3(p.x * 2.7, 0.0, p.z * 2.7));\n"
 "      float run = smoothstep(0.66, 0.92, cn) * smoothstep(1.20, -0.55, wy);\n"
-"      alb = mix(alb, vec3(0.26, 0.19, 0.10), upr * run * 0.70);\n"
+"      alb = mix(alb, vec3(0.26, 0.19, 0.10), upr * run * decayZ * 0.70);\n"
 /* the paint lets go where the water ran, and grey render shows under it */
 "      float peel = smoothstep(0.58, 0.66, grain(p * 2.4)) * dmg;\n"
 "      alb = mix(alb, vec3(0.40, 0.39, 0.36), upr * peel * 0.85);\n"
@@ -990,23 +1000,23 @@ static const char *CAVE_FS =
    only resting in a grid. What is behind them is not another surface. */
 "      float gx = floor((p.x + 0.3) / 0.6), gz = floor((p.z + 0.3) / 0.6);\n"
 "      float gone = step(0.78, h1(gx * 31.7 + gz * 7.13 + 3.0));\n"
-"      alb = mix(alb, vec3(0.035, 0.035, 0.040), m_cei * gone * 0.94);\n"
+"      alb = mix(alb, vec3(0.035, 0.035, 0.040), m_cei * gone * decayZ * 0.94);\n"
 /* and there is a building above the ceiling. A void with nothing in it is a
    black rectangle; a void with one dull pipe crossing it is a hole. */
 "      float pip = smoothstep(0.052, 0.030, abs(fract(p.x * 0.9 + 0.35) - 0.5) * 1.1)\n"
 "                + smoothstep(0.044, 0.024, abs(fract(p.z * 1.3 + 0.2) - 0.5) * 1.1);\n"
 "      alb = mix(alb, vec3(0.20, 0.19, 0.17),\n"
-"                m_cei * gone * clamp(pip, 0.0, 1.0) * 0.85);\n"
+"                m_cei * gone * clamp(pip, 0.0, 1.0) * decayZ * 0.85);\n"
 /* a few places where the render has come off the wall entirely, not flaked */
 "      float loss = smoothstep(0.70, 0.78, grain(p * 0.62));\n"
-"      alb = mix(alb, vec3(0.30, 0.28, 0.25), upr * loss * 0.80);\n"
+"      alb = mix(alb, vec3(0.30, 0.28, 0.25), upr * loss * decayZ * 0.80);\n"
 /* mould where the wall meets anything, which is where it always starts */
 "      float mould = smoothstep(-1.34, -1.74, wy) + smoothstep(1.10, 1.46, wy);\n"
 "      alb = mix(alb, vec3(0.11, 0.13, 0.09),\n"
-"                upr * clamp(mould, 0.0, 1.0) * (0.30 + 0.45 * dirt) * 0.62);\n"
+"                upr * clamp(mould, 0.0, 1.0) * (0.30 + 0.45 * dirt) * decayZ * 0.62);\n"
 /* and the floor is only dirty -- vinyl does not crack, it lifts and stains */
 "      alb = mix(alb, vec3(0.33, 0.30, 0.22),\n"
-"                m_flr * smoothstep(0.55, 0.80, grain(p * 0.9)) * 0.42);\n"
+"                m_flr * smoothstep(0.55, 0.80, grain(p * 0.9)) * decayZ * 0.42);\n"
 "    }\n"
 "    float dado = smoothstep(-0.88, -0.74, wy);\n"
 "    alb *= mix(1.0, mix(0.70, 1.10, dado), upr * uRoom);\n"
@@ -1138,8 +1148,11 @@ static const char *CAVE_FS =
    the fittings now sit at a readable level and swell on the beat. */
 /* The heart drives the swell; a hand on a switch out in the ward drives all
    of them at once, which is a different thing and has to look like one. */
-"    vec3 pan = ((uProto == 3) ? vec3(0.42, 1.20, 0.60)\n"
-"                             : vec3(0.94, 1.00, 0.96)) * uRoom\n"
+/* and two stretches where the tubes are simply the wrong colour, which is a
+   thing that happens in real buildings and is worse for being plausible */
+"    float greenZ = max(zone(-p.z, 336.0, 354.0), zone(-p.z, 462.0, 480.0));\n"
+"    vec3 pan = mix(vec3(0.94, 1.00, 0.96), vec3(0.40, 1.22, 0.58),\n"
+"                   max(greenZ, uProto == 3 ? 1.0 : 0.0)) * uRoom\n"
 "             * (0.78 + 0.95 * uBlink + 2.30 * uWard) * (1.0 - 0.72 * uDark);\n"
 "    for (int px = 0; px < 2; px++)\n"
 "    for (int pz = 0; pz < 2; pz++) {\n"
