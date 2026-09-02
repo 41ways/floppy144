@@ -120,6 +120,7 @@ static int idx(int ix, int iz) { return iz * NX + ix; }
  * centre is the most generous one there is -- a ceiling on walkability, not a
  * promise. Which is why -y exists. */
 static float g_probe_y = -0.3f;   /* metres below the tunnel centre */
+static int   g_three = 1;         /* -2d falls back to one slice */
 
 /* Probed against the height the building is actually at, not the tunnel's.
  * The hall used to inherit the cave's wandering axis, so following the tunnel
@@ -128,6 +129,33 @@ static float g_probe_y = -0.3f;   /* metres below the tunnel centre */
  * one height, which can be metres from where the axis has drifted to. Probing
  * the old way put the sample inside rock at the very first row -- the flood
  * had nowhere to start and reported the game unfinishable on every seed. */
+/* Nothing in this game gives the player a height. Movement is the camera's
+ * forward vector, so looking up or down flies, and a walk that was measured
+ * across the ward drifted 1.65 m -- 0.17 down to -1.48 -- without ever
+ * leaving the air. So a flood at one height is neither a ceiling on
+ * walkability nor a floor under it: it is a slice through a space the player
+ * moves in three directions, and slices disagree. At -0.05 the ward reads
+ * 40/40 and at -0.50 it reads 36/40, and both numbers are answering a
+ * question nobody asked.
+ *
+ * The honest check floods all three axes. NY heights, and up and down are
+ * moves like any other. */
+#define YLO   (-1.85f)
+#define YHI    ( 1.35f)
+static int NY;
+static int idx3(int ix, int iy, int iz) { return (iz * NY + iy) * NX + ix; }
+
+static int walkable3(int ix, int iy, int iz)
+{
+    float cx, cy, st2, cyh;
+    float x = -XSPAN + ix * g_step;
+    float z = -(ZLO + iz * g_step);
+    tunnel_centre(z, &cx, &cy);
+    st2 = smoothstep01(GATE_2 + 4.0f, GATE_2 + 19.0f, -z);
+    cyh = cy * (1.0f - st2) + g_hosp_y * st2;
+    return cave_sdf(x, cyh + YLO + iy * g_step, z) >= PLAYER_R;
+}
+
 static int walkable(int ix, int iz)
 {
     float cx, cy, st2, cyh;
@@ -143,6 +171,45 @@ static int walkable(int ix, int iz)
  * grid is solid on purpose. "Reached the door" therefore means what the game
  * means by it in game.c: standing close enough that a ping opens it. */
 #define DOOR_IZ ((int)((WAKE_Z - 1.6f - ZLO) / g_step))
+
+/* The three-axis flood. Same rule, one more direction. */
+static int flood3(int *reached_out, int *open_out, int *deepest_out)
+{
+    int ix, iy, iz, head = 0, tail = 0, got_door = 0;
+    int open = 0, reached = 0, deepest = 0;
+    size_t n = (size_t)NX * NY * NZ;
+
+    memset(pass, 0, n);
+    for (iz = 0; iz < NZ; iz++)
+      for (iy = 0; iy < NY; iy++)
+        for (ix = 0; ix < NX; ix++)
+            if (walkable3(ix, iy, iz)) { pass[idx3(ix,iy,iz)] = 1; open++; }
+
+    for (iy = 0; iy < NY; iy++)
+      for (ix = 0; ix < NX; ix++)
+        if (pass[idx3(ix,iy,0)] == 1) {
+            pass[idx3(ix,iy,0)] = 2; queue[tail++] = idx3(ix,iy,0); }
+
+    while (head < tail) {
+        int cur = queue[head++];
+        int cix = cur %% NX, ciy = (cur / NX) %% NY, ciz = cur / (NX * NY);
+        static const int dx[6] = {1,-1, 0, 0, 0, 0};
+        static const int dy[6] = {0, 0, 1,-1, 0, 0};
+        static const int dz[6] = {0, 0, 0, 0, 1,-1};
+        int d;
+        reached++;
+        if (ciz > deepest) deepest = ciz;
+        if (ciz >= DOOR_IZ) got_door = 1;
+        for (d = 0; d < 6; d++) {
+            int nx = cix + dx[d], ny = ciy + dy[d], nz = ciz + dz[d];
+            if (nx < 0 || nx >= NX || ny < 0 || ny >= NY || nz < 0 || nz >= NZ) continue;
+            if (pass[idx3(nx,ny,nz)] != 1) continue;
+            pass[idx3(nx,ny,nz)] = 2; queue[tail++] = idx3(nx,ny,nz);
+        }
+    }
+    *reached_out = reached; *open_out = open; *deepest_out = deepest;
+    return got_door;
+}
 
 /* Returns 1 if the door is reachable from the hall entrance. */
 static int flood(int *reached_out, int *open_out, int *deepest_out)
@@ -188,6 +255,7 @@ int main(int argc, char **argv)
     int exact, field, trials;
     if (argc > 2 && strcmp(argv[1], "-y") == 0) { g_probe_y = (float)atof(argv[2]); a = 3; }
     if (argc > a + 1 && strcmp(argv[a], "-r") == 0) { g_step = CELL / (float)atoi(argv[a+1]); a += 2; }
+    if (argc > a && strcmp(argv[a], "-2d") == 0) { g_three = 0; a += 1; }
     exact = argc > a && strcmp(argv[a], "-s") == 0;
     field = argc > a + 3 && strcmp(argv[a], "-f") == 0;
     trials = field ? 1 : exact ? argc - a - 1 : (argc > a ? atoi(argv[a]) : 40);
@@ -197,13 +265,21 @@ int main(int argc, char **argv)
 
     NX = (int)(2.0f * XSPAN / g_step) + 1;
     NZ = (int)((ZHI - ZLO) / g_step) + 1;
-    pass  = malloc((size_t)NX * NZ);
-    queue = malloc(sizeof(int) * (size_t)NX * NZ);
+    NY = g_three ? (int)((YHI - YLO) / g_step) + 1 : 1;
+    pass  = malloc((size_t)NX * NY * NZ);
+    queue = malloc(sizeof(int) * (size_t)NX * NY * NZ);
     if (!pass || !queue) { fprintf(stderr, "out of memory\n"); return 2; }
 
-    printf("grid %%d x %%d at %%.2f m, hall z -%%.0f .. -%%.0f, clearance %%.2f m,"
-           " probing %%.2f m below centre\n",
-           NX, NZ, g_step, (double)ZLO, (double)ZHI, (double)PLAYER_R, (double)g_probe_y);
+    if (g_three)
+        printf("grid %%d x %%d x %%d at %%.2f m, hall z -%%.0f .. -%%.0f, clearance"
+               " %%.2f m, heights %%.2f .. %%.2f about the floor line\n",
+               NX, NY, NZ, g_step, (double)ZLO, (double)ZHI, (double)PLAYER_R,
+               (double)YLO, (double)YHI);
+    else
+        printf("grid %%d x %%d at %%.2f m, hall z -%%.0f .. -%%.0f, clearance %%.2f m,"
+               " ONE SLICE %%.2f m below centre\n",
+               NX, NZ, g_step, (double)ZLO, (double)ZHI, (double)PLAYER_R,
+               (double)g_probe_y);
 
     for (t = 0; t < trials; t++) {
         static const float shocks[2] = {0.0f, 2.0f};
@@ -238,7 +314,8 @@ int main(int argc, char **argv)
                 g_door_open = 0.0f;
             }
 
-            ok  = flood(&reached, &open, &deepest);
+            ok  = g_three ? flood3(&reached, &open, &deepest)
+                          : flood(&reached, &open, &deepest);
             iso = open ? 100.0 * (open - reached) / open : 0.0;
             if (iso > worst_iso) { worst_iso = iso; worst_seed = t; }
             if (!ok) {

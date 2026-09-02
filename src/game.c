@@ -860,6 +860,25 @@ static float cave_sdf(float x, float y, float z)
                 float k2 = smoothstep01(ROOM_A, ROOM_B, -z);
                 main_air = main_air * (1.0f - k2) + hall * k2;
             }
+            {   /* And the spine once more, after the blend instead of inside it.
+                 * Unioned into hall it still had to survive the lerp with the
+                 * cave, and on a seed where the tube runs off the axis the mix
+                 * of a solid cave and an open corridor came out 0.602 m --
+                 * eighteen millimetres under the 0.62 the player is, across the
+                 * whole width and the whole height of the building. That seed
+                 * was unwinnable eleven metres in, and no part of the maze was
+                 * involved; a three-axis flood put it at 255.0 to 256.0 m.
+                 *
+                 * Union, so it can only ever add air. Nothing else can be
+                 * sealed by it. */
+                float kc2 = 1.0f - smoothstep01(ROOM_B, ROOM_B + 21.0f, -z);
+                if (kc2 > 0.0f) {
+                    float sw2 = 2.60f * kc2 - (float)fabs(x - cx);
+                    float sh2 = 1.55f - (float)fabs(y - (cyh - 1.35f) - 1.30f);
+                    float sp2 = sw2 < sh2 ? sw2 : sh2;
+                    if (sp2 > main_air) main_air = sp2;
+                }
+            }
         }
         {   /* the far side of the lamp room is the end of the world */
             float wall = z + (LAMP_Z + 14.0f);

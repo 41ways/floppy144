@@ -853,6 +853,17 @@ static const char *CAVE_FS =
 "                   1.75 - abs(p.y - fl3 - 1.45)), (uWakeZ + 40.0) - dep);\n"
 "  }\n"
 "  m = mix(m, boxm, roomAt(p.z));\n"
+/* the spine, after the blend -- mirrors cave_sdf. Union only: it can add air
+   and never take it, and without it the transition pinches to 0.602 m on some
+   seeds, which is under the 0.62 the player is. */
+"  {\n"
+"    float kc2 = 1.0 - smoothstep(266.0, 287.0, -p.z);\n"
+"    if (kc2 > 0.0) {\n"
+"      float sw2 = 2.60 * kc2 - abs(p.x - c.x);\n"
+"      float sh2 = 1.55 - abs(p.y - (cyh - 1.35) - 1.30);\n"
+"      m = max(m, min(sw2, sh2));\n"
+"    }\n"
+"  }\n"
 /* ---- 2차 시안: 바닥에 서는 것들 -----------------------------------------
    Visual only -- these live in the shader field and not in cave_sdf, so you
    walk through them. That is the right trade for a proposal: it costs one
