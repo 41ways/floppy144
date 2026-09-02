@@ -783,6 +783,51 @@ static float cave_sdf(float x, float y, float z)
                 float ob = ward_objects(x, y, z, cyh);
                 if (ob < hall) hall = ob;
             }
+            {   /* And the three that change the room itself, which were left
+                 * out of here because they were not appearing at all -- their
+                 * lay() depth and their own hard-coded band did not overlap,
+                 * so each evaluated to nothing everywhere. Same depths as
+                 * lay() uses, or the picture and the collision disagree. */
+                float dep2 = -z;
+                float fl   = cyh - 1.35f;
+                if (ob_zone(dep2, 414.0f, 424.0f) > 0.02f) {
+                    /* SC-2: the ceiling comes down to eighty centimetres */
+                    float zb  = ob_zone(dep2, 414.0f, 424.0f);
+                    /* 1.34 and not 0.80. At 0.80 the ceiling sits twelve
+                     * centimetres over the eye, so the only way through is to
+                     * look down and fly under it -- which the three-axis
+                     * flood happily does and a player does not, and the spawn
+                     * came out at fit 0.58, inside the rock. This still drops
+                     * the ceiling most of a metre; it just leaves room to
+                     * walk under it. */
+                    float low = 1.34f - (float)fabs(y - fl - 0.66f);
+                    float mixed = hall * (1.0f - zb) + (low < hall ? low : hall) * zb;
+                    hall = mixed;
+                }
+                if (ob_zone(dep2, 320.0f, 334.0f) > 0.02f) {
+                    /* SC-4: no cross walls and no doors, just a run */
+                    float zb = ob_zone(dep2, 320.0f, 334.0f);
+                    float cw = 2.6f - (float)fabs(x - g_corr_x);
+                    float chh = 1.55f - (float)fabs(y - fl - 1.30f);
+                    float run = cw < chh ? cw : chh;
+                    /* Unioned, not lerped. Lerping a narrow slot against the
+                     * rooms walls out everyone who is not already standing on
+                     * its axis when they reach it -- 18 floods in 40 died at
+                     * 316 m, right at this zone's mouth. It is the third time
+                     * this exact mistake has sealed this game: a mix of an
+                     * open thing and a solid thing is a solid thing. */
+                    run *= zb;
+                    if (run > hall) hall = run;
+                }
+                if (dep2 > 506.6f && dep2 < 507.4f
+                    && (float)fabs(x - g_corr_x) < 2.20f) {
+                    /* PL-4: a dead end, the width of a corridor and no wider.
+                     * Across the whole building it would not be a dead end,
+                     * it would be the end of the game. */
+                    float w4 = (float)fabs(dep2 - 507.0f) - 0.20f;
+                    if (w4 < hall) hall = w4;
+                }
+            }
             {   /* The spine.
                  *
                  * A morph between a two-metre tube and a maze of seven-metre

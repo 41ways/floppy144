@@ -820,20 +820,29 @@ static const char *CAVE_FS =
    셰이더 필드에만 들어 있다. 채택하면 cave_sdf에도 넣고 mazecheck를 다시
    돌려야 한다 -- 천장을 내리고 벽을 세우는 것은 통과 가능성을 바꾼다. */
 "  if (lay(33, -p.z) > 0.02) {\n"
-/* SC-2 내려앉은 천장 — 한 구역만 1.55 m에서 0.80 m로 */
-"    float zb = zone(-p.z, 524.0, 538.0);\n"
-"    float low = 0.80 - abs(p.y - (cyh - 1.35) - 0.62);\n"
+/* SC-2 내려앉은 천장 — 한 구역만 1.55 m에서 0.80 m로.
+   범위는 lay()가 정한다. 여기 따로 zone()을 두었더니 lay가 놓는 깊이와
+   겹치지 않아 세 개 다 한 번도 나타나지 않았다 -- 렌더용으로 고정 깊이에
+   박아둔 비계를 안 걷어낸 것이다. */
+"    float zb = lay(33, -p.z);\n"
+"    float low = 1.34 - abs(p.y - (cyh - 1.35) - 0.66);\n"
 "    boxm = min(boxm, mix(9.0, low, zb));\n"
 "  }\n"
 "  if (lay(34, -p.z) > 0.02) {\n"
-/* SC-4 끝이 안 보이는 복도 — 가로벽도 문도 없는 한 줄 */
-"    float zb = zone(-p.z, 518.0, 548.0);\n"
-"    float hall = min(2.6 - abs(p.x - uCorrX), 1.55 - abs(p.y - (cyh - 1.35) - 1.30));\n"
-"    boxm = mix(boxm, hall, zb);\n"
+/* SC-4 끝이 안 보이는 복도 — 열린 한 줄을 방들 위에 union 한다.
+   lerp 하면 그 축에 서 있지 않은 사람은 전부 벽에 갇힌다. */
+"    float zb = lay(34, -p.z);\n"
+"    float run = min(2.6 - abs(p.x - uCorrX),\n"
+"                    1.55 - abs(p.y - (cyh - 1.35) - 1.30)) * zb;\n"
+"    boxm = max(boxm, run);\n"
 "  }\n"
 "  if (lay(36, -p.z) > 0.02) {\n"
-/* PL-4 벽이 된 복도 — 다 갖춘 복도가 아무 표시 없이 끝난다 */
-"    if (-p.z > 536.0 && -p.z < 536.5) boxm = min(boxm, abs(-p.z - 536.25) - 0.25);\n"
+/* PL-4 벽이 된 복도 — 다 갖춘 복도가 아무 표시 없이 끝난다.
+   복도 폭만큼만 막는다: 건물 전체를 가로지르면 그건 막다른 길이 아니라
+   게임의 끝이다. */
+"    float pw = 2.20 - abs(p.x - uCorrX);\n"
+"    if (-p.z > 506.6 && -p.z < 507.4 && pw > 0.0)\n"
+"      boxm = min(boxm, abs(-p.z - 507.0) - 0.20);\n"
 "  }\n"
 "  float dep = -p.z;\n"
 /* The T at the end of the rooms, matching cave_sdf: a cross-corridor the
